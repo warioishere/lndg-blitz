@@ -21,6 +21,7 @@ router.register(r'peerevents', views.PeerEventsViewSet)
 router.register(r'trades', views.TradeSalesViewSet)
 router.register(r'feelog', views.FeeLogViewSet)
 router.register(r'inboundfeelog', views.InboundFeeLogViewSet)
+router.register(r'rebalanceroutes', views.RebalanceRouteViewSet)
 
 urlpatterns = [
     path('', views.home, name='home'),
@@ -43,6 +44,8 @@ urlpatterns = [
     path('income', views.income, name='income'),
     path('rebalances', views.rebalances, name='rebalances'),
     path('rebalancing', views.rebalancing, name='rebalancing'),
+    path('rebalanceroutes', views.rebalance_routes, name='rebalance-routes'),
+    path('rebalanceroute/<int:id>', views.rebalance_route_detail, name='rebalance-route-detail'),
     path('openchannel/', views.open_channel_form, name='open-channel-form'),
     path('closechannel/', views.close_channel_form, name='close-channel-form'),
     path('connectpeer/', views.connect_peer_form, name='connect-peer-form'),

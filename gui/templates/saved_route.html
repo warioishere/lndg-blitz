@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - Saved Route{% endblock %}
+{% block content %}
+{% load humanize %}
+<div class="w3-container w3-padding-small">
+  <h2>Saved Route</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Attempt Id</th>
+      <th>Step</th>
+      <th>Alias</th>
+      <th>Pubkey</th>
+    </tr>
+    {% for hop in route %}
+    <tr>
+      <td>{{ hop.attempt_id }}</td>
+      <td>{{ hop.step }}</td>
+      <td>{% if hop.alias %}{{ hop.alias }}{% else %}---{% endif %}</td>
+      <td>{{ hop.pubkey }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
