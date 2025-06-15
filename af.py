@@ -12,6 +12,7 @@ def main(channels):
     if channels_df.shape[0] == 0:
         return DataFrame()
     filter_1day = datetime.now() - timedelta(days=1)
+    filter_4h = datetime.now() - timedelta(hours=4)
     filter_7day = datetime.now() - timedelta(days=7)
     if LocalSettings.objects.filter(key='AF-MaxRate').exists():
         max_rate = int(LocalSettings.objects.filter(key='AF-MaxRate')[0].value)
@@ -61,11 +62,22 @@ def main(channels):
     # Fetch forwarding data
     forwards = Forwards.objects.filter(forward_date__gte=filter_7day, amt_out_msat__gte=1000000)
     forwards_1d = forwards.filter(forward_date__gte=filter_1day)
+    forwards_4h = forwards.filter(forward_date__gte=filter_4h)
     
     forwards_df_in_1d_sum = DataFrame.from_records(
         forwards_1d.values('chan_id_in').annotate(amt_out_msat=Sum('amt_out_msat'), fee=Sum('fee')), 
         index='chan_id_in'
     ) if forwards_1d.exists() else DataFrame()
+    
+    forwards_df_in_4h_sum = DataFrame.from_records(
+        forwards_4h.values('chan_id_in').annotate(amt_out_msat=Sum('amt_out_msat')),
+        index='chan_id_in'
+    ) if forwards_4h.exists() else DataFrame()
+    
+    forwards_df_out_4h_sum = DataFrame.from_records(
+        forwards_4h.values('chan_id_out').annotate(amt_out_msat=Sum('amt_out_msat')),
+        index='chan_id_out'
+    ) if forwards_4h.exists() else DataFrame()
     
     forwards_df_in_7d_sum = DataFrame.from_records(
         forwards.values('chan_id_in').annotate(amt_out_msat=Sum('amt_out_msat'), fee=Sum('fee')), 
@@ -135,6 +147,19 @@ def main(channels):
         ).fillna(0).astype(float)
     else:
         channels_df['revenue_7day'] = 0.0
+    if not forwards_df_in_4h_sum.empty:
+        channels_df['amt_routed_in_4h'] = channels_df['chan_id'].map(
+            forwards_df_in_4h_sum['amt_out_msat'].floordiv(1000)
+        ).fillna(0).astype(int)
+    else:
+        channels_df['amt_routed_in_4h'] = 0
+    if not forwards_df_out_4h_sum.empty:
+        channels_df['amt_routed_out_4h'] = channels_df['chan_id'].map(
+            forwards_df_out_4h_sum['amt_out_msat'].floordiv(1000)
+        ).fillna(0).astype(int)
+    else:
+        channels_df['amt_routed_out_4h'] = 0
+
 
     # Aggregate data by remote_pubkey
     group_df = channels_df.groupby('remote_pubkey').agg({
@@ -144,6 +169,8 @@ def main(channels):
         'amt_routed_in_1day': 'sum',
         'amt_routed_in_7day': 'sum',
         'amt_routed_out_7day': 'sum',
+        'amt_routed_in_4h': 'sum',      # <---- HINZUGEFÜGT
+        'amt_routed_out_4h': 'sum',     # <---- HINZUGEFÜGT
         'revenue_7day': 'sum',
         'revenue_assist_7day': 'sum'
     }).rename(columns={
@@ -154,6 +181,8 @@ def main(channels):
         'amt_routed_in_7day': 'total_amt_routed_in_7day',
         'amt_routed_out_7day': 'total_amt_routed_out_7day',
         'revenue_7day': 'total_revenue_7day',
+        'amt_routed_in_4h': 'total_amt_routed_in_4h',     # <---- HINZUGEFÜGT
+        'amt_routed_out_4h': 'total_amt_routed_out_4h',   # <---- HINZUGEFÜGT
         'revenue_assist_7day': 'total_revenue_assist_7day'
     })
 
@@ -167,9 +196,18 @@ def main(channels):
 
     # Define outbound adjustment calculation function
     def compute_outbound_adjustment(row):
+    # Neue Zusatz-Logik: schneller reagieren bei zu wenig Aktivität in 4h
+        if row['overall_out_percent'] <= lowliq_limit and row['total_amt_routed_in_4h'] < 1000:
+            return 1  # kleiner Schritt nach oben (1 ppm)
+
         if row['overall_out_percent'] <= lowliq_limit:
             return (5 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and 
                                     row['total_amt_routed_in_1day'] == 0) else 0
+        elif row['overall_out_percent'] >= excess_limit:
+            if row['total_amt_routed_in_4h'] + row['total_amt_routed_out_4h'] < 1000:
+                return -1  # kleiner Schritt nach unten (1 ppm), Kanal voll aber wenig Traffic
+            else:
+                return 0
         elif row['overall_out_percent'] < excess_limit:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
                 return -3 * multiplier
@@ -222,6 +260,9 @@ def main(channels):
     channels_df['adjustment'] = channels_df['new_rate'] - channels_df['local_fee_rate']
 
     # Compute new inbound rates
+    if 'ar_max_cost' not in channels_df.columns:
+        channels_df['ar_max_cost'] = 0
+
     channels_df['new_inbound_rate'] = channels_df['local_inbound_fee_rate'] + channels_df['inbound_adjustment']
     channels_df['new_inbound_rate'] = (channels_df['new_inbound_rate'] / increment).round(0) * increment
     channels_df['new_inbound_rate'] = channels_df['new_inbound_rate'].clip(-((channels_df['ar_max_cost']/100)*channels_df['local_fee_rate']), 0)
