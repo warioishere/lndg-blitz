@@ -352,3 +352,43 @@ class TradeSales(models.Model):
     secret = models.CharField(null=True, max_length=1000)
     sale_limit = models.IntegerField(null=True)
     sale_count = models.IntegerField(default=0)
+
+def calc_success_ratio(success_count, failure_count):
+    return (success_count + 1) / (success_count + failure_count + 2)
+
+
+class RebalanceRoute(models.Model):
+    target_pubkey = models.CharField(max_length=66)
+    outgoing_chan_id = models.CharField(max_length=20)
+    # hyphen separated list of hop pubkeys (normalized path)
+    route = models.TextField()
+    # serialized ln.Route hex string, when available
+    route_hex = models.TextField(null=True)
+    final_cltv_delta = models.IntegerField(default=144)
+    success_count = models.IntegerField(default=0)
+    failure_count = models.IntegerField(default=0)
+    last_success = models.DateTimeField(null=True, default=None)
+    last_failure = models.DateTimeField(null=True, default=None)
+
+    @property
+    def success_ratio(self) -> float:
+        return calc_success_ratio(self.success_count, self.failure_count)
+
+    class Meta:
+        app_label = 'gui'
+        unique_together = (('target_pubkey', 'outgoing_chan_id', 'route'),)
+        indexes = [
+            models.Index(
+                fields=['target_pubkey', 'outgoing_chan_id'],
+                name='rebalroute_target_out_idx',
+            )
+        ]
+
+
+class NodeCache(models.Model):
+    pubkey = models.CharField(max_length=66, primary_key=True)
+    data = models.JSONField()
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        app_label = 'gui'

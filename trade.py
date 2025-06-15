@@ -19,6 +19,7 @@ from os import environ
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
 from gui.models import TradeSales, Payments, PaymentHops, Forwards, Peers
+from gui.node_cache import get_node_info_cached
 
 def is_hex(n):
     return len(n) % 2 == 0 and all(c in '0123456789ABCDEFabcdef' for c in n)
@@ -1042,7 +1043,7 @@ def main():
                 try:
                     to_peer = connection[0]['node']['id']
                     if not (Peers.objects.filter(pubkey=to_peer).exists() and Peers.objects.filter(pubkey=to_peer)[0].connected == True):
-                        host = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=to_peer, include_channels=False)).node.addresses[0].addr
+                        host = get_node_info_cached(to_peer, stub).node.addresses[0].addr
                         stub.ConnectPeer(ln.ConnectPeerRequest(addr=ln.LightningAddress(pubkey=to_peer, host=host), timeout=60))
                 except:
                     raise ValueError('PeerConnectionError')

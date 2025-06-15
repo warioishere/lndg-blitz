@@ -1,8 +1,9 @@
 import django, json, secrets, asyncio
 from time import sleep
 from asgiref.sync import sync_to_async
-from django.db.models import Sum, F
+from django.db.models import Sum, F, Q
 from datetime import datetime, timedelta
+from django.utils import timezone
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps import router_pb2 as lnr
@@ -13,7 +14,68 @@ from typing import List
 
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
-from gui.models import Rebalancer, Channels, LocalSettings, Forwards, Autopilot
+from gui.models import (
+    Rebalancer,
+    Channels,
+    LocalSettings,
+    Forwards,
+    Autopilot,
+    RebalanceRoute,
+    calc_success_ratio,
+)
+
+# map standard failure codes and internal details to enum names for clearer logs
+FAILURE_CODE_NAMES = {
+    1: "INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS",
+    2: "INCORRECT_PAYMENT_AMOUNT",
+    3: "FINAL_INCORRECT_CLTV_EXPIRY",
+    4: "FINAL_INCORRECT_HTLC_AMOUNT",
+    5: "FINAL_EXPIRY_TOO_SOON",
+    6: "INVALID_REALM",
+    7: "EXPIRY_TOO_SOON",
+    8: "INVALID_ONION_VERSION",
+    9: "INVALID_ONION_HMAC",
+    10: "INVALID_ONION_KEY",
+    11: "AMOUNT_BELOW_MINIMUM",
+    12: "FEE_INSUFFICIENT",
+    13: "INCORRECT_CLTV_EXPIRY",
+    14: "CHANNEL_DISABLED",
+    15: "TEMPORARY_CHANNEL_FAILURE",
+    16: "REQUIRED_NODE_FEATURE_MISSING",
+    17: "REQUIRED_CHANNEL_FEATURE_MISSING",
+    18: "UNKNOWN_NEXT_PEER",
+    19: "TEMPORARY_NODE_FAILURE",
+    20: "PERMANENT_NODE_FAILURE",
+    21: "PERMANENT_CHANNEL_FAILURE",
+    22: "EXPIRY_TOO_FAR",
+    23: "MPP_TIMEOUT",
+}
+
+FAILURE_DETAIL_NAMES = {
+    0: "UNKNOWN",
+    1: "NO_DETAIL",
+    2: "ONION_DECODE",
+    3: "LINK_NOT_ELIGIBLE",
+    4: "ON_CHAIN_TIMEOUT",
+    5: "HTLC_EXCEEDS_MAX",
+    6: "INSUFFICIENT_BALANCE",
+    7: "INCOMPLETE_FORWARD",
+    8: "HTLC_ADD_FAILED",
+    9: "FORWARDS_DISABLED",
+    10: "INVOICE_CANCELED",
+    11: "INVOICE_UNDERPAID",
+    12: "INVOICE_EXPIRY_TOO_SOON",
+    13: "INVOICE_NOT_OPEN",
+    14: "MPP_INVOICE_TIMEOUT",
+    15: "ADDRESS_MISMATCH",
+    16: "SET_TOTAL_MISMATCH",
+    17: "SET_TOTAL_TOO_LOW",
+    18: "SET_OVERPAID",
+    19: "UNKNOWN_INVOICE",
+    20: "INVALID_KEYSEND",
+    21: "MPP_IN_PROGRESS",
+    22: "CIRCULAR_ROUTE",
+}
 
 @sync_to_async
 def get_out_cans(rebalance, auto_rebalance_channels):
@@ -35,6 +97,103 @@ def inbound_cans_len(inbound_cans):
         return len(inbound_cans)
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting inbound cands: {str(e)}")
+
+@sync_to_async
+def get_route_limit():
+    try:
+        setting = LocalSettings.objects.filter(key='RR-RouteLimit').first()
+        return int(setting.value) if setting else 10
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting route limit: {str(e)}")
+        return 10
+
+@sync_to_async
+def routes_collection_enabled():
+    try:
+        setting = LocalSettings.objects.filter(key='RR-CollectRoutes').first()
+        return False if setting and setting.value == '0' else True
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting route collect setting: {str(e)}")
+        return True
+
+@sync_to_async
+def saved_routes_enabled():
+    try:
+        setting = LocalSettings.objects.filter(key='RR-UseSavedRoutes').first()
+        return False if setting and setting.value == '0' else True
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting saved route setting: {str(e)}")
+        return True
+
+@sync_to_async
+def get_saved_routes(pubkey, chan_ids, limit=10):
+    try:
+        cutoff = timezone.now() - timedelta(minutes=30)
+        return list(
+            RebalanceRoute.objects
+            .filter(target_pubkey=pubkey, outgoing_chan_id__in=chan_ids)
+            .filter(Q(last_failure__lt=cutoff) | Q(last_failure__isnull=True))
+            .annotate(ratio=calc_success_ratio(F('success_count'), F('failure_count')))
+            .order_by('-ratio')[:limit]
+        )
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting saved routes: {str(e)}")
+        return []
+
+@sync_to_async
+def update_route(pubkey, chan_id, route_hex, success=True):
+    try:
+        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+            return
+        parsed = ln.Route()
+        parsed.ParseFromString(bytes.fromhex(route_hex))
+        path = "-".join(h.pub_key for h in parsed.hops)
+        if len(parsed.hops) >= 2:
+            cltv = parsed.hops[-1].expiry - parsed.hops[-2].expiry
+        else:
+            cltv = 144
+        route_obj, _ = RebalanceRoute.objects.get_or_create(
+            target_pubkey=pubkey,
+            outgoing_chan_id=chan_id,
+            route=path,
+            defaults={"final_cltv_delta": cltv, "route_hex": route_hex},
+        )
+        if route_obj.final_cltv_delta != cltv:
+            route_obj.final_cltv_delta = cltv
+        if not route_obj.route_hex:
+            route_obj.route_hex = route_hex
+        now = timezone.now()
+        if success:
+            if not route_obj.last_success or now - route_obj.last_success > timedelta(minutes=5):
+                route_obj.success_count += 1
+            route_obj.last_success = now
+        else:
+            route_obj.failure_count += 1
+            route_obj.last_failure = now
+        route_obj.save()
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error updating route record: {str(e)}")
+
+@sync_to_async
+def purge_stale_routes():
+    try:
+        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+            return
+        cutoff = timezone.now() - timedelta(days=7)
+        RebalanceRoute.objects.filter(Q(last_success__lt=cutoff) | Q(last_success__isnull=True)).delete()
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error purging stale routes: {str(e)}")
+
+@sync_to_async
+def mark_route_failure(sr):
+    try:
+        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+            return
+        sr.failure_count += 1
+        sr.last_failure = timezone.now()
+        sr.save(update_fields=['failure_count', 'last_failure'])
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error marking route failure: {str(e)}")
 
 @sync_to_async
 def check_and_set_allow_multishards():
@@ -74,38 +233,187 @@ async def run_rebalancer(rebalance, worker):
             routerstub = lnrouter.RouterStub(async_lnd_connect())
             chan_ids = json.loads(rebalance.outgoing_chan_ids)
             timeout = rebalance.duration * 60
-            invoice_response = stub.AddInvoice(ln.Invoice(value=rebalance.value, expiry=timeout))
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : {worker} starting rebalance for {rebalance.target_alias} {rebalance.last_hop_pubkey} for {rebalance.value} sats and duration {rebalance.duration}, using {len(chan_ids)} outbound channels")
-            async for payment_response in routerstub.SendPaymentV2(lnr.SendPaymentRequest(payment_request=str(invoice_response.payment_request), fee_limit_msat=int(rebalance.fee_limit*1000), outgoing_chan_ids=chan_ids, last_hop_pubkey=bytes.fromhex(rebalance.last_hop_pubkey), timeout_seconds=(timeout-5), allow_self_payment=True, max_parts=max_parts), timeout=(timeout+60)):
-                if payment_response.status == 1 and rebalance.status == 0:
-                    #IN-FLIGHT
-                    rebalance.payment_hash = payment_response.payment_hash
-                    rebalance.status = 1
-                    await save_record(rebalance)
-                elif payment_response.status == 2:
-                    #SUCCESSFUL
-                    rebalance.status = 2
-                    rebalance.fees_paid = payment_response.fee_msat/1000
-                    successful_out = payment_response.htlcs[0].route.hops[0].pub_key
-                elif payment_response.status == 3:
-                    #FAILURE
-                    if payment_response.failure_reason == 1:
-                        #FAILURE_REASON_TIMEOUT
-                        rebalance.status = 3
-                    elif payment_response.failure_reason == 2:
-                        #FAILURE_REASON_NO_ROUTE
-                        rebalance.status = 4
-                    elif payment_response.failure_reason == 3:
-                        #FAILURE_REASON_ERROR
-                        rebalance.status = 5
-                    elif payment_response.failure_reason == 4:
-                        #FAILURE_REASON_INCORRECT_PAYMENT_DETAILS
-                        rebalance.status = 6
-                    elif payment_response.failure_reason == 5:
-                        #FAILURE_REASON_INSUFFICIENT_BALANCE
-                        rebalance.status = 7
-                elif payment_response.status == 0:
-                    rebalance.status = 400
+            invoice_response = stub.AddInvoice(
+                ln.Invoice(value=rebalance.value, expiry=timeout)
+            )
+            # record the payment hash early so logs show it even when using
+            # SendToRouteV2 which doesn't stream hash updates
+            rebalance.payment_hash = invoice_response.r_hash.hex()
+            print(
+                f"{datetime.now().strftime('%c')} : [Rebalancer] : {worker} starting rebalance for {rebalance.target_alias} {rebalance.last_hop_pubkey} for {rebalance.value} sats and duration {rebalance.duration}, using {len(chan_ids)} outbound channels"
+            )
+
+            use_saved = await saved_routes_enabled()
+            if use_saved:
+                await purge_stale_routes()
+                route_limit = await get_route_limit()
+                saved_routes = await get_saved_routes(rebalance.last_hop_pubkey, chan_ids, limit=route_limit)
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Loaded {len(saved_routes)} saved routes to try")
+            else:
+                saved_routes = []
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved routes disabled")
+            fee_limit_msat = int(rebalance.fee_limit * 1000)
+            payment_response = None
+            for sr in saved_routes:
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Trying saved route via {sr.outgoing_chan_id}")
+                rebuilt_hex = None
+                try:
+                    if sr.route_hex:
+                        parsed_sr = ln.Route()
+                        parsed_sr.ParseFromString(bytes.fromhex(sr.route_hex))
+                        hop_keys = [bytes.fromhex(h.pub_key) for h in parsed_sr.hops]
+                        if sr.final_cltv_delta:
+                            cltv_delta = sr.final_cltv_delta
+                        elif len(parsed_sr.hops) >= 2:
+                            cltv_delta = parsed_sr.hops[-1].expiry - parsed_sr.hops[-2].expiry
+                        else:
+                            cltv_delta = 144
+                    else:
+                        hop_keys = [
+                            bytes.fromhex(k.decode() if isinstance(k, (bytes, bytearray)) else k)
+                            for k in sr.route.split('-')
+                        ]
+                        cltv_delta = sr.final_cltv_delta or 144
+                    build = await routerstub.BuildRoute(
+                        lnr.BuildRouteRequest(
+                            outgoing_chan_id=int(sr.outgoing_chan_id),
+                            amt_msat=rebalance.value * 1000,
+                            hop_pubkeys=hop_keys,
+                            final_cltv_delta=cltv_delta,
+                            payment_addr=invoice_response.payment_addr,
+                        )
+                    )
+                    print(
+                        f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute succeeded via {sr.outgoing_chan_id}"
+                    )
+
+                    if build.route.total_fees_msat > fee_limit_msat:
+                        print(
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr.outgoing_chan_id} exceeds fee limit"
+                        )
+                        rebuilt_hex = build.route.SerializeToString().hex()
+                        await update_route(
+                            rebalance.last_hop_pubkey,
+                            sr.outgoing_chan_id,
+                            rebuilt_hex,
+                            False,
+                        )
+                        payment_response = None
+                        continue
+
+                    route_msg = build.route
+                    rebuilt_hex = route_msg.SerializeToString().hex()
+                    payment_response = await routerstub.SendToRouteV2(
+                        lnr.SendToRouteRequest(
+                            payment_hash=invoice_response.r_hash,
+                            route=route_msg,
+                        ),
+                        timeout=timeout,
+                    )
+                    # HTLCStatus uses 1 for SUCCEEDED
+                    if payment_response.status == 1:
+                        print(
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route succeeded via {sr.outgoing_chan_id} - hash: {rebalance.payment_hash}"
+                        )
+                        await update_route(
+                            rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, True
+                        )
+                        rebalance.status = 2
+                        fees_msat = getattr(payment_response, "fee_msat", None)
+                        if not fees_msat:
+                            try:
+                                fees_msat = payment_response.route.total_fees_msat
+                            except Exception:
+                                fees_msat = 0
+                        rebalance.fees_paid = fees_msat / 1000 if fees_msat else 0
+                        try:
+                            successful_out = payment_response.route.hops[0].pub_key
+                        except Exception:
+                            successful_out = None
+                        break
+                    else:
+                        failure = getattr(payment_response, "failure", None)
+                        if failure:
+                            code_num = getattr(failure, "code", None)
+                            reason = FAILURE_CODE_NAMES.get(code_num, code_num)
+                            detail_num = getattr(failure, "failure_detail", None)
+                            if detail_num is None:
+                                detail = "not set"
+                            else:
+                                detail = FAILURE_DETAIL_NAMES.get(detail_num, detail_num)
+                        else:
+                            reason = "no-details"
+                            detail = "not set"
+                        print(
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route failed via {sr.outgoing_chan_id} - code: {reason} - detail: {detail}"
+                        )
+                        await update_route(
+                            rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, False
+                        )
+                except Exception as e:
+                    print(
+                        f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute failed via {sr.outgoing_chan_id} - {e}"
+                    )
+                    if rebuilt_hex is not None:
+                        await update_route(
+                            rebalance.last_hop_pubkey,
+                            sr.outgoing_chan_id,
+                            rebuilt_hex,
+                            False,
+                        )
+                    else:
+                        await mark_route_failure(sr)
+                    payment_response = None
+
+            if payment_response is None or payment_response.status != 1:
+                    if saved_routes:
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Falling back to automatic routing")
+                    async for payment_response in routerstub.SendPaymentV2(lnr.SendPaymentRequest(payment_request=str(invoice_response.payment_request), fee_limit_msat=int(rebalance.fee_limit*1000), outgoing_chan_ids=chan_ids, last_hop_pubkey=bytes.fromhex(rebalance.last_hop_pubkey), timeout_seconds=(timeout-5), allow_self_payment=True, max_parts=max_parts), timeout=(timeout+60)):
+                        if payment_response.status == 1 and rebalance.status == 0:
+                            #IN-FLIGHT
+                            rebalance.payment_hash = payment_response.payment_hash
+                            rebalance.status = 1
+                            await save_record(rebalance)
+                        elif payment_response.status == 2:
+                            #SUCCESSFUL
+                            print(
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Automatic route (SendPaymentV2) succeeded - hash: {rebalance.payment_hash}"
+                            )
+                            rebalance.status = 2
+                            fees_msat = getattr(payment_response, "fee_msat", None)
+                            if not fees_msat and payment_response.htlcs:
+                                try:
+                                    fees_msat = payment_response.htlcs[0].route.total_fees_msat
+                                except Exception:
+                                    fees_msat = 0
+                            rebalance.fees_paid = fees_msat / 1000 if fees_msat else 0
+                            successful_out = payment_response.htlcs[0].route.hops[0].pub_key
+                            route_hex = payment_response.htlcs[0].route.SerializeToString().hex()
+                            out_chan = str(payment_response.htlcs[0].route.hops[0].chan_id)
+                            await update_route(rebalance.last_hop_pubkey, out_chan, route_hex, True)
+                        elif payment_response.status == 3:
+                            #FAILURE
+                            if payment_response.htlcs:
+                                route_hex = payment_response.htlcs[0].route.SerializeToString().hex()
+                                out_chan = str(payment_response.htlcs[0].route.hops[0].chan_id)
+                                await update_route(rebalance.last_hop_pubkey, out_chan, route_hex, False)
+                            if payment_response.failure_reason == 1:
+                                #FAILURE_REASON_TIMEOUT
+                                rebalance.status = 3
+                            elif payment_response.failure_reason == 2:
+                                #FAILURE_REASON_NO_ROUTE
+                                rebalance.status = 4
+                            elif payment_response.failure_reason == 3:
+                                #FAILURE_REASON_ERROR
+                                rebalance.status = 5
+                            elif payment_response.failure_reason == 4:
+                                #FAILURE_REASON_INCORRECT_PAYMENT_DETAILS
+                                rebalance.status = 6
+                            elif payment_response.failure_reason == 5:
+                                #FAILURE_REASON_INSUFFICIENT_BALANCE
+                                rebalance.status = 7
+                        elif payment_response.status == 0:
+                            rebalance.status = 400
         except Exception as e:
             if str(e.code()) == 'StatusCode.DEADLINE_EXCEEDED':
                 rebalance.status = 408

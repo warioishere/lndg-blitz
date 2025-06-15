@@ -1,6 +1,6 @@
 import django
 from time import sleep
-from django.db.models import Max, Sum, Avg, Count
+from django.db.models import Max, Sum, Avg, Count, Q
 from django.db.models.functions import TruncDay
 from datetime import datetime, timedelta
 from gui.lnd_deps import lightning_pb2 as ln
@@ -14,6 +14,7 @@ from requests import get
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
 from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, Closures, Resolutions, PendingHTLCs, LocalSettings, FailedHTLCs, Autofees, InboundFeeLog, PendingChannels, HistFailedHTLC, PeerEvents
+from gui.node_cache import get_node_info_cached
 import af
 
 def update_payments(stub):
@@ -59,8 +60,8 @@ def update_payment(stub, payment, self_pubkey):
                 for hop in hops:
                     hop_count += 1
                     try:
-                        alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=hop.pub_key, include_channels=False)).node.alias
-                    except:
+                        alias = get_node_info_cached(hop.pub_key, stub).node.alias
+                    except Exception:
                         alias = ''
                     fee = hop.fee_msat/1000
                     if hop_count == total_hops:
@@ -119,8 +120,8 @@ def update_invoice(stub, invoice, db_invoice):
                     valid = False
                 sender = records[34349339].hex() if valid == True else None
                 try:
-                    sender_alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=sender, include_channels=False)).node.alias if sender != None else None
-                except:
+                    sender_alias = get_node_info_cached(sender, stub).node.alias if sender is not None else None
+                except Exception:
                     sender_alias = None
             else:
                 sender = None
@@ -206,11 +207,15 @@ def update_channels(stub):
             #Update the channel record with the most current data
             db_channel = Channels.objects.filter(chan_id=channel.chan_id)[0]
             pending_channel = None
+            # ensure alias stays in sync with peer table
+            peer_alias = Peers.objects.filter(pubkey=channel.remote_pubkey).values_list('alias', flat=True).first()
+            if peer_alias is not None and peer_alias != db_channel.alias:
+                db_channel.alias = peer_alias
         else:
             #Create a record for this new channel
             try:
-                alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=channel.remote_pubkey, include_channels=False)).node.alias
-            except:
+                alias = get_node_info_cached(channel.remote_pubkey, stub).node.alias
+            except Exception:
                 alias = ''
             channel_point = channel.channel_point
             txid, index = channel_point.split(':')
@@ -457,17 +462,18 @@ def update_peers(stub):
             db_peer.sat_recv = peer.sat_recv
             db_peer.inbound = peer.inbound
             db_peer.ping_time = round(peer.ping_time/1000)
-            if db_peer.connected == False:
-                try:
-                    db_peer.alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer.pub_key, include_channels=False)).node.alias
-                except:
-                    db_peer.alias = ''
+            try:
+                alias = get_node_info_cached(peer.pub_key, stub).node.alias
+            except Exception:
+                alias = None
+            if alias and (not db_peer.alias or db_peer.alias != alias):
+                db_peer.alias = alias
             db_peer.connected = True
             db_peer.save()
         elif exists == 0:
             try:
-                alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer.pub_key, include_channels=False)).node.alias
-            except:
+                alias = get_node_info_cached(peer.pub_key, stub).node.alias
+            except Exception:
                 alias = ''
             Peers(pubkey = peer.pub_key, address = peer.address, sat_sent = peer.sat_sent, sat_recv = peer.sat_recv, inbound = peer.inbound, ping_time = round(peer.ping_time/1000), alias=alias, connected = True).save()
         counter += 1
@@ -477,6 +483,18 @@ def update_peers(stub):
         disconnected = Peers.objects.filter(connected=True).exclude(pubkey__in=peer_list)
         for peer in disconnected:
             peer.connected = False
+            peer.save()
+
+def refresh_peer_aliases(stub):
+    """Refresh aliases for peers without an alias."""
+    peers = Peers.objects.filter(Q(alias__isnull=True) | Q(alias=''))
+    for peer in peers:
+        try:
+            alias = get_node_info_cached(peer.pubkey, stub).node.alias
+        except Exception:
+            alias = None
+        if alias:
+            peer.alias = alias
             peer.save()
 
 def update_onchain(stub):
@@ -544,7 +562,7 @@ def reconnect_peers(stub):
                         print(f"{datetime.now().strftime('%c')} : [Data] : Inactive channel is still connected to peer, disconnecting peer {peer.alias} {inactive_peer}")
                         disconnectpeer(stub, peer)
                     try:
-                        node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=inactive_peer, include_channels=False)).node
+                        node = get_node_info_cached(inactive_peer, stub).node
                         host = node.addresses[0].addr
                     except Exception as e:
                         print(f"{datetime.now().strftime('%c')} : [Data] : Unable to find node info on graph, using last known value for {peer.alias} {peer.pubkey} at {peer.address}: {str(e)}")
@@ -686,6 +704,7 @@ def main():
             stub = lnrpc.LightningStub(lnd_connect())
             #Update data
             update_peers(stub)
+            refresh_peer_aliases(stub)
             update_channels(stub)
             update_invoices(stub)
             update_payments(stub)

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - Saved Routes{% endblock %}
+{% block content %}
+<div class="w3-container w3-padding-small">
+  <h2>Saved Routes</h2>
+  <form class="w3-margin-bottom" action="/update_setting/" method="post">
+    {% csrf_token %}
+    <label for="route_limit">Routes to try:</label>
+    <input id="route_limit" name="value" type="number" min="1" max="50" value="{{ route_limit }}">
+    <input type="hidden" name="key" value="RR-RouteLimit">
+    <input type="submit" value="Save">
+  </form>
+  <form class="w3-margin-bottom" action="/update_setting/" method="post">
+    {% csrf_token %}
+    <label for="collect_routes">Collect Routes:</label>
+    <select id="collect_routes" name="value">
+      <option value="1" {% if collect_routes %}selected{% endif %}>On</option>
+      <option value="0" {% if not collect_routes %}selected{% endif %}>Off</option>
+    </select>
+    <input type="hidden" name="key" value="RR-CollectRoutes">
+    <input type="submit" value="Save">
+  </form>
+  <form class="w3-margin-bottom" action="/update_setting/" method="post">
+    {% csrf_token %}
+    <label for="use_saved">Use Saved Routes:</label>
+    <select id="use_saved" name="value">
+      <option value="1" {% if use_saved_routes %}selected{% endif %}>On</option>
+      <option value="0" {% if not use_saved_routes %}selected{% endif %}>Off</option>
+    </select>
+    <input type="hidden" name="key" value="RR-UseSavedRoutes">
+    <input type="submit" value="Save">
+  </form>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Target Pubkey</th>
+        <th>Outgoing Chan ID</th>
+        <th>Success Ratio</th>
+        <th>Successes</th>
+        <th>Failures</th>
+        <th>Last Success</th>
+        <th>Last Failure</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody id="routesTable"></tbody>
+  </table>
+</div>
+<script>
+async function loadRoutes(){
+  const res = await GET('rebalanceroutes', {data:{}});
+  if(res.results){
+    const table = byId('routesTable');
+    table.innerHTML = '';
+    res.results.sort((a,b)=>{
+      const ta = (a.target_alias || a.target_pubkey).toLowerCase();
+      const tb = (b.target_alias || b.target_pubkey).toLowerCase();
+      if(ta < tb) return -1;
+      if(ta > tb) return 1;
+      return b.success_ratio - a.success_ratio;
+    });
+    res.results.forEach(r => {
+      const row = table.insertRow();
+      row.objId = r.id;
+      row.insertCell().innerText = (r.target_alias ? r.target_alias + ' - ' : '') + r.target_pubkey;
+      row.insertCell().innerText = (r.outgoing_alias ? r.outgoing_alias + ' - ' : '') + r.outgoing_chan_id;
+      row.insertCell().innerText = (r.success_ratio*100).toFixed(1)+'%';
+      row.insertCell().innerText = r.success_count;
+      row.insertCell().innerText = r.failure_count;
+      row.insertCell().innerText = r.last_success ? formatDate(r.last_success) : '---';
+      row.insertCell().innerText = r.last_failure ? formatDate(r.last_failure) : '---';
+      const cell = row.insertCell();
+      const view = document.createElement('a');
+      view.innerText = 'View';
+      view.href = `/rebalanceroute/${r.id}`;
+      view.target = '_blank';
+      cell.appendChild(view);
+      cell.appendChild(document.createTextNode(' '));
+      const del = document.createElement('button');
+      del.innerText = 'Delete';
+      del.onclick = async () => {
+        if(!confirm('Delete this route?')) return;
+        await DELETE(`rebalanceroutes/${r.id}`);
+        row.remove();
+      };
+      cell.appendChild(del);
+    });
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadRoutes);
+</script>
+{% endblock %}

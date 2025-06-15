@@ -1,17 +1,19 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, render, redirect
-from django.db.models import Sum, IntegerField, Count, Max, F, Q, Case, When, Value, FloatField, ExpressionWrapper, DateTimeField, DurationField
+from django.db.models import Sum, IntegerField, Count, Max, F, Q, Case, When, Value, FloatField, ExpressionWrapper, DateTimeField, DurationField, OuterRef, Subquery
 from django.db.models.functions import Round, TruncDay, Coalesce
 from django.contrib.auth.decorators import login_required
 from django_filters import FilterSet, CharFilter, DateTimeFilter, NumberFilter
 from datetime import datetime, timedelta
+from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
-from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales
+from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, calc_success_ratio
+from gui.node_cache import get_node_info_cached
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps import router_pb2 as lnr
@@ -44,6 +46,17 @@ def network_links():
         LocalSettings(key='GUI-NetLinks', value='https://mempool.space').save()
         network_links = 'https://mempool.space'
     return network_links
+
+# Cache our node alias and pubkey for short periods to avoid repeated GetInfo calls
+_self_info_cache = {'time': None, 'info': None}
+
+def get_self_info():
+    now = timezone.now()
+    if not _self_info_cache['info'] or now - _self_info_cache['time'] > timedelta(minutes=1):
+        stub = lnrpc.LightningStub(lnd_connect())
+        _self_info_cache['info'] = stub.GetInfo(ln.GetInfoRequest())
+        _self_info_cache['time'] = now
+    return _self_info_cache['info']
 
 def get_tx_fees(txid):
     base_url = network_links() + ('/testnet' if settings.LND_NETWORK == 'testnet' else '') + '/api/tx/'
@@ -1606,7 +1619,7 @@ def open_peer(peer_pubkey, stub):
         return True
     else:
         try:
-            node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+            node = get_node_info_cached(peer_pubkey, stub).node
             host = node.addresses[0].addr
             ln_addr = ln.LightningAddress(pubkey=peer_pubkey, host=host)
             stub.ConnectPeer(ln.ConnectPeerRequest(addr=ln_addr))
@@ -1758,6 +1771,53 @@ def rebalancing(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def rebalance_routes(request):
+    if request.method == 'GET':
+        setting = LocalSettings.objects.filter(key='RR-RouteLimit').first()
+        route_limit = setting.value if setting else 10
+        collect_setting = LocalSettings.objects.filter(key='RR-CollectRoutes').first()
+        collect_routes = False if collect_setting and collect_setting.value == '0' else True
+        use_setting = LocalSettings.objects.filter(key='RR-UseSavedRoutes').first()
+        use_saved = False if use_setting and use_setting.value == '0' else True
+        context = {
+            'route_limit': route_limit,
+            'collect_routes': collect_routes,
+            'use_saved_routes': use_saved,
+        }
+        return render(request, 'rebalance_routes.html', context)
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def rebalance_route_detail(request, id):
+    if request.method == 'GET':
+        try:
+            record = get_object_or_404(RebalanceRoute, pk=id)
+            info = get_self_info()
+            self_pubkey = info.identity_pubkey
+            self_alias = info.alias
+            hops = []
+            for step, pub in enumerate(record.route.split('-'), start=1):
+                alias = ''
+                if pub == self_pubkey:
+                    alias = self_alias
+                else:
+                    peer = Peers.objects.filter(pubkey=pub).first()
+                    alias = peer.alias if peer else ''
+                hops.append({
+                    'attempt_id': 1,
+                    'step': step,
+                    'alias': alias,
+                    'pubkey': pub,
+                })
+            return render(request, 'saved_route.html', {'route': hops})
+        except Exception as e:
+            error = str(e)
+            return render(request, 'error.html', {'error': error})
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def keysends(request):
     if request.method == 'GET':
         context = {
@@ -1851,7 +1911,7 @@ def open_channel_form(request):
                     connected = True
                 else:
                     try:
-                        node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+                        node = get_node_info_cached(peer_pubkey, stub).node
                         host = node.addresses[0].addr
                         ln_addr = ln.LightningAddress(pubkey=peer_pubkey, host=host)
                         response = stub.ConnectPeer(ln.ConnectPeerRequest(addr=ln_addr))
@@ -1930,7 +1990,7 @@ def connect_peer_form(request):
                 peer_id = form.cleaned_data['peer_id']
                 if peer_id.count('@') == 0 and len(peer_id) == 66:
                     peer_pubkey = peer_id
-                    node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+                    node = get_node_info_cached(peer_pubkey, stub).node
                     host = node.addresses[0].addr
                 elif peer_id.count('@') == 1 and len(peer_id.split('@')[0]) == 66:
                     peer_pubkey, host = peer_id.split('@')
@@ -2396,6 +2456,24 @@ def update_setting(request):
                 db_enabled.value = target
                 db_enabled.save()
                 messages.success(request, 'Updated autofees update hours setting to: ' + str(target))
+            elif key == 'RR-RouteLimit':
+                target = int(value)
+                setting, _ = LocalSettings.objects.get_or_create(key='RR-RouteLimit', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Route limit updated to: ' + str(target))
+            elif key == 'RR-CollectRoutes':
+                target = '1' if str(value) == '1' else '0'
+                setting, _ = LocalSettings.objects.get_or_create(key='RR-CollectRoutes', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Route collecting ' + ('enabled' if target == '1' else 'disabled'))
+            elif key == 'RR-UseSavedRoutes':
+                target = '1' if str(value) == '1' else '0'
+                setting, _ = LocalSettings.objects.get_or_create(key='RR-UseSavedRoutes', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Saved route usage ' + ('enabled' if target == '1' else 'disabled'))
             else:
                 messages.error(request, 'Invalid Request. Please try again. [' + key +']')
         else:
@@ -2604,6 +2682,41 @@ class InboundFeeLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = InboundFeeLog.objects.all().order_by('-id')
     serializer_class = InboundFeeLogSerializer
     filterset_fields = {'chan_id': ['exact'], 'id': ['lt']}
+
+class RebalanceRouteViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
+    target_alias = Peers.objects.filter(pubkey=OuterRef('target_pubkey')).values('alias')[:1]
+    outgoing_alias = Channels.objects.filter(chan_id=OuterRef('outgoing_chan_id')).values('alias')[:1]
+    queryset = (
+        RebalanceRoute.objects.annotate(
+            ratio=calc_success_ratio(F('success_count'), F('failure_count')),
+            target_alias=Subquery(target_alias),
+            outgoing_alias=Subquery(outgoing_alias),
+        ).order_by('target_alias', '-ratio')
+    )
+    serializer_class = RebalanceRouteSerializer
+    filterset_fields = {'target_pubkey': ['exact'], 'outgoing_chan_id': ['exact']}
+
+    def retrieve(self, request, pk=None):
+        route = get_object_or_404(self.queryset, pk=pk)
+        hops = []
+        for step, pub in enumerate(route.route.split('-'), start=1):
+            peer = Peers.objects.filter(pubkey=pub).first()
+            alias = peer.alias if peer else ''
+            hops.append({
+                'attempt_id': 1,
+                'step': step,
+                'alias': alias,
+                'pubkey': pub,
+            })
+        data = self.get_serializer(route).data
+        data['hops'] = hops
+        return Response(data)
+
+    def destroy(self, request, pk=None):
+        route = get_object_or_404(self.queryset, pk=pk)
+        route.delete()
+        return Response({'message': 'Deleted'})
 
 class FailedHTLCFilter(FilterSet):
     chan_in_or_out = CharFilter(method='filter_chan_in_or_out', label='Chan In Or Out')
@@ -2937,7 +3050,7 @@ def connect_peer(request):
             peer_id = serializer.validated_data['peer_id']
             if peer_id.count('@') == 0 and len(peer_id) == 66:
                 peer_pubkey = peer_id
-                node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+                node = get_node_info_cached(peer_pubkey, stub).node
                 host = node.addresses[0].addr
             elif peer_id.count('@') == 1 and len(peer_id.split('@')[0]) == 66:
                 peer_pubkey, host = peer_id.split('@')
@@ -3006,7 +3119,7 @@ def open_channel(request):
                 connected = True
             else:
                 try:
-                    node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+                    node = get_node_info_cached(peer_pubkey, stub).node
                     host = node.addresses[0].addr
                     ln_addr = ln.LightningAddress(pubkey=peer_pubkey, host=host)
                     response = stub.ConnectPeer(ln.ConnectPeerRequest(addr=ln_addr))
@@ -3140,7 +3253,7 @@ def update_alias(request):
         if Channels.objects.filter(remote_pubkey=peer_pubkey).exists():
             try:
                 stub = lnrpc.LightningStub(lnd_connect())
-                new_alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey)).node.alias
+                new_alias = get_node_info_cached(peer_pubkey, stub).node.alias
                 update_channels = Channels.objects.filter(remote_pubkey=peer_pubkey)
                 for channel in update_channels:
                     channel.alias = new_alias
