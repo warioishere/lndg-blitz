@@ -29,6 +29,7 @@ Welcome to LNDg, an advanced web interface designed for analyzing Lightning Netw
   - [HTLC Failure Stream](#htlc-failure-stream)
   - [API Backend](#api-backend)
   - [Peer Reconnection](#peer-reconnection)
+  - [Peer Alias Refresh](#peer-alias-refresh)
 - [Auto-Fees](#auto-fees)
   - [Auto-Fees Settings](#auto-fees-settings)
   - [Auto-Fees Notes](#auto-fees-notes)
@@ -294,6 +295,10 @@ Append `?format=json` for JSON output.
 ### Peer Reconnection
 
 Automatically attempts to reconnect to peers associated with inactive channels (max once every 3 minutes per peer).
+
+### Peer Alias Refresh
+
+Aliases for peers are periodically updated using cached node info even when the peer is disconnected.
 
 ## Auto-Fees
 

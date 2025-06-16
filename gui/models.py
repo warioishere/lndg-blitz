@@ -383,3 +383,12 @@ class RebalanceRoute(models.Model):
                 name='rebalroute_target_out_idx',
             )
         ]
+
+
+class NodeCache(models.Model):
+    pubkey = models.CharField(max_length=66, primary_key=True)
+    data = models.JSONField()
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        app_label = 'gui'

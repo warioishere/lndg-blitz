@@ -13,6 +13,7 @@ from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
 from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, calc_success_ratio
+from gui.node_cache import get_node_info_cached
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps import router_pb2 as lnr
@@ -1618,7 +1619,7 @@ def open_peer(peer_pubkey, stub):
         return True
     else:
         try:
-            node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+            node = get_node_info_cached(peer_pubkey, stub).node
             host = node.addresses[0].addr
             ln_addr = ln.LightningAddress(pubkey=peer_pubkey, host=host)
             stub.ConnectPeer(ln.ConnectPeerRequest(addr=ln_addr))
@@ -1901,7 +1902,7 @@ def open_channel_form(request):
                     connected = True
                 else:
                     try:
-                        node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+                        node = get_node_info_cached(peer_pubkey, stub).node
                         host = node.addresses[0].addr
                         ln_addr = ln.LightningAddress(pubkey=peer_pubkey, host=host)
                         response = stub.ConnectPeer(ln.ConnectPeerRequest(addr=ln_addr))
@@ -1980,7 +1981,7 @@ def connect_peer_form(request):
                 peer_id = form.cleaned_data['peer_id']
                 if peer_id.count('@') == 0 and len(peer_id) == 66:
                     peer_pubkey = peer_id
-                    node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+                    node = get_node_info_cached(peer_pubkey, stub).node
                     host = node.addresses[0].addr
                 elif peer_id.count('@') == 1 and len(peer_id.split('@')[0]) == 66:
                     peer_pubkey, host = peer_id.split('@')
@@ -3028,7 +3029,7 @@ def connect_peer(request):
             peer_id = serializer.validated_data['peer_id']
             if peer_id.count('@') == 0 and len(peer_id) == 66:
                 peer_pubkey = peer_id
-                node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+                node = get_node_info_cached(peer_pubkey, stub).node
                 host = node.addresses[0].addr
             elif peer_id.count('@') == 1 and len(peer_id.split('@')[0]) == 66:
                 peer_pubkey, host = peer_id.split('@')
@@ -3097,7 +3098,7 @@ def open_channel(request):
                 connected = True
             else:
                 try:
-                    node = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey, include_channels=False)).node
+                    node = get_node_info_cached(peer_pubkey, stub).node
                     host = node.addresses[0].addr
                     ln_addr = ln.LightningAddress(pubkey=peer_pubkey, host=host)
                     response = stub.ConnectPeer(ln.ConnectPeerRequest(addr=ln_addr))
@@ -3231,7 +3232,7 @@ def update_alias(request):
         if Channels.objects.filter(remote_pubkey=peer_pubkey).exists():
             try:
                 stub = lnrpc.LightningStub(lnd_connect())
-                new_alias = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=peer_pubkey)).node.alias
+                new_alias = get_node_info_cached(peer_pubkey, stub).node.alias
                 update_channels = Channels.objects.filter(remote_pubkey=peer_pubkey)
                 for channel in update_channels:
                     channel.alias = new_alias
