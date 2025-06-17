@@ -9,48 +9,31 @@
         <th>Channel ID</th>
         <th>Peer Alias</th>
         <th>Helper Source</th>
-        <th>Allowed Targets</th>
-        <th>Margin (ppm)</th>
       </tr>
     </thead>
     <tbody>
-      {% for c in sources %}
+      {% for c in channels %}
       <tr>
         <td><a href="/channel?={{ c.chan_id }}" target="_blank">{{ c.short_chan_id }}</a></td>
         <td>{{ c.alias }}</td>
-        <td style="background-color:{% if c.ar_allow_source %}rgba(46,160,67,0.15){% else %}rgba(248,81,73,0.15){% endif %}">
+        <td style="background-color:{% if c.allow_source %}rgba(46,160,67,0.15){% else %}rgba(248,81,73,0.15){% endif %}">
           <form action="/update_source/" method="post">
             {% csrf_token %}
             <input type="hidden" name="chan_id" value="{{ c.chan_id }}">
-            <input type="hidden" name="allow_source" value="{% if c.ar_allow_source %}0{% else %}1{% endif %}">
-            <input type="submit" value="{% if c.ar_allow_source %}Disable{% else %}Enable{% endif %}">
-          </form>
-        </td>
-        <td>
-          <form action="/update_source/" method="post">
-            {% csrf_token %}
-            <input type="hidden" name="chan_id" value="{{ c.chan_id }}">
-            <select name="allowed_targets" multiple size="3">
-              {% for t in c.target_options %}
-              <option value="{{ t.remote_pubkey }}" {% if t.remote_pubkey in c.allowed_list %}selected{% endif %}>{{ t.alias }}</option>
-              {% endfor %}
-            </select>
-            <input type="hidden" name="source_margin" value="{{ c.ar_source_margin }}">
-            <input type="submit" value="Save">
-          </form>
-        </td>
-        <td>
-          <form action="/update_source/" method="post" class="w3-margin-none">
-            {% csrf_token %}
-            <input type="hidden" name="chan_id" value="{{ c.chan_id }}">
-            <input type="number" name="source_margin" value="{{ c.ar_source_margin }}" min="0" max="5000" style="width:80px">
-            <input type="submit" value="Set">
+            <input type="hidden" name="allow_source" value="{% if c.allow_source %}0{% else %}1{% endif %}">
+            <input type="submit" value="{% if c.allow_source %}Disable{% else %}Enable{% endif %}">
           </form>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  <p class="w3-small w3-padding">Leave all targets unselected to allow any eligible channel. Only channels with a higher outbound fee rate than the source plus its margin are shown. Margin values are added to the global setting of {{ base_margin }} ppm.</p>
+  <form class="w3-margin-top" action="/update_source/" method="post">
+    {% csrf_token %}
+    <label>Minimum fee rate difference (ppm)</label>
+    <input type="number" name="source_margin" value="{{ margin }}" min="0" max="5000" style="width:80px">
+    <input type="submit" value="Save">
+  </form>
+  <p class="w3-small w3-padding">Channels listed are AR enabled but not currently rebalancing. Enabling one lets it provide outbound liquidity to other channels if its fee rate plus the margin is lower than the target.</p>
 </div>
 {% endblock %}

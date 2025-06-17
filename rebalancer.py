@@ -81,7 +81,7 @@ def get_inflight_pubkeys():
     try:
         return list(
             Rebalancer.objects
-                .filter(status__in=[0,1])
+                .filter(status__in=[0, 1])
                 .values_list('last_hop_pubkey', flat=True)
         )
     except Exception as e:
@@ -92,22 +92,21 @@ def get_inflight_pubkeys():
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
         inflight = get_inflight_pubkeys()
-        margin_base = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
-        target_fee = Channels.objects.filter(remote_pubkey=rebalance.last_hop_pubkey).first().local_fee_rate
+        margin_setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
+        margin = int(margin_setting.value) if margin_setting else 0
+        target = Channels.objects.filter(remote_pubkey=rebalance.last_hop_pubkey).first()
+        target_rate = target.local_fee_rate if target else 0
         candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=rebalance.last_hop_pubkey)
         chans = []
         for c in candidates:
-            allowed = True
-            if not c.ar_allow_source or c.remote_pubkey in inflight:
-                allowed = False
-            margin = margin_base + (c.ar_source_margin or 0)
-            if target_fee <= c.local_fee_rate + margin:
-                allowed = False
-            allowed_list = json.loads(c.ar_allowed_targets) if c.ar_allowed_targets else []
-            if allowed_list and rebalance.last_hop_pubkey not in allowed_list:
-                allowed = False
-            if allowed:
-                chans.append(c.chan_id)
+            if c.remote_pubkey in inflight:
+                continue
+            setting = LocalSettings.objects.filter(key=f'AR-SRC-{c.chan_id}').first()
+            if not setting or setting.value != '1':
+                continue
+            if target_rate <= c.local_fee_rate + margin:
+                continue
+            chans.append(c.chan_id)
         return chans
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting outbound cands: {str(e)}")
@@ -572,22 +571,20 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Target%', value='3').save()
         if not LocalSettings.objects.filter(key='AR-MaxCost%').exists():
             LocalSettings(key='AR-MaxCost%', value='65').save()
-        margin_base = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
+        margin_setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
+        base_margin = int(margin_setting.value) if margin_setting else 0
         for target in inbound_cans:
             candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=target.remote_pubkey)
             outbound_cans = []
             for c in candidates:
-                allowed = True
-                if not c.ar_allow_source or c.remote_pubkey in inflight:
-                    allowed = False
-                margin = margin_base + (c.ar_source_margin or 0)
-                if target.local_fee_rate <= c.local_fee_rate + margin:
-                    allowed = False
-                allowed_list = json.loads(c.ar_allowed_targets) if c.ar_allowed_targets else []
-                if allowed_list and target.remote_pubkey not in allowed_list:
-                    allowed = False
-                if allowed:
-                    outbound_cans.append(c.chan_id)
+                if c.remote_pubkey in inflight:
+                    continue
+                setting = LocalSettings.objects.filter(key=f'AR-SRC-{c.chan_id}').first()
+                if not setting or setting.value != '1':
+                    continue
+                if target.local_fee_rate <= c.local_fee_rate + base_margin:
+                    continue
+                outbound_cans.append(c.chan_id)
             if len(outbound_cans) == 0:
                 continue
             target_fee_rate = min(max_fee_rate, int(target.local_fee_rate * (target.ar_max_cost/100)))

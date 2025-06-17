@@ -1,6 +1,5 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, render, redirect
-import json
 from django.db.models import Sum, IntegerField, Count, Max, F, Q, Case, When, Value, FloatField, ExpressionWrapper, DateTimeField, DurationField, OuterRef, Subquery
 from django.db.models.functions import Round, TruncDay, Coalesce
 from django.contrib.auth.decorators import login_required
@@ -31,6 +30,7 @@ from requests import get
 from secrets import token_bytes
 from trade import create_trade_details
 import af
+from rebalancer import get_inflight_pubkeys
 
 def graph_links():
     if LocalSettings.objects.filter(key='GUI-GraphLinks').exists():
@@ -1793,21 +1793,17 @@ def rebalance_routes(request):
 def advanced_rebalancing(request):
     if request.method == 'GET':
         inflight = get_inflight_pubkeys()
-        setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
-        if not setting:
-            setting = LocalSettings.objects.create(key='AR-SourcePPMdiff', value='0')
-        base = int(setting.value)
-        enabled = Channels.objects.filter(auto_rebalance=True, is_active=True, is_open=True).exclude(remote_pubkey__in=inflight)
-        sources = []
-        for c in enabled:
-            c.allowed_list = json.loads(c.ar_allowed_targets) if c.ar_allowed_targets else []
-            margin = base + (c.ar_source_margin or 0)
-            c.target_options = Channels.objects.filter(is_active=True, is_open=True, private=False,
-                                                     local_fee_rate__gt=c.local_fee_rate + margin).exclude(chan_id=c.chan_id).order_by('alias')
-            sources.append(c)
+        margin_setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
+        if not margin_setting:
+            margin_setting = LocalSettings.objects.create(key='AR-SourcePPMdiff', value='0')
+        margin = int(margin_setting.value)
+        channels = Channels.objects.filter(auto_rebalance=True, is_active=True, is_open=True).exclude(remote_pubkey__in=inflight)
+        for c in channels:
+            setting = LocalSettings.objects.filter(key=f'AR-SRC-{c.chan_id}').first()
+            c.allow_source = False if not setting else setting.value == '1'
         context = {
-            'sources': sources,
-            'base_margin': base
+            'channels': channels,
+            'margin': margin
         }
         return render(request, 'advanced_rebalancing.html', context)
     else:
@@ -1817,18 +1813,16 @@ def advanced_rebalancing(request):
 def update_source(request):
     if request.method == 'POST':
         chan_id = request.POST.get('chan_id')
-        if chan_id and Channels.objects.filter(chan_id=chan_id).exists():
-            chan = Channels.objects.get(chan_id=chan_id)
+        if chan_id:
             if 'allow_source' in request.POST:
-                chan.ar_allow_source = request.POST.get('allow_source') == '1'
-            if 'allowed_targets' in request.POST:
-                chan.ar_allowed_targets = json.dumps(request.POST.getlist('allowed_targets'))
-            if 'source_margin' in request.POST:
-                try:
-                    chan.ar_source_margin = int(request.POST.get('source_margin'))
-                except Exception:
-                    pass
-            chan.save()
+                value = '1' if request.POST.get('allow_source') == '1' else '0'
+                LocalSettings.objects.update_or_create(key=f'AR-SRC-{chan_id}', defaults={'value': value})
+        if 'source_margin' in request.POST:
+            try:
+                margin = int(request.POST.get('source_margin'))
+                LocalSettings.objects.update_or_create(key='AR-SourcePPMdiff', defaults={'value': str(margin)})
+            except Exception:
+                pass
         return redirect('advanced-rebalancing')
     else:
         return redirect('home')
@@ -2120,7 +2114,6 @@ def get_local_settings(*prefixes):
         form.append({'unit': '', 'form_id': 'autopilot', 'value': 0, 'label': 'Autopilot', 'id': 'AR-Autopilot', 'title': 'This enables or disables the Auto-Rebalance function for individual channels based on flow (automatically acts upon suggestions on this page: /actions)', 'min':0, 'max':1})
         form.append({'unit': 'days', 'form_id': 'autopilotdays', 'value': 7, 'label': 'Autopilot Days', 'id': 'AR-APDays', 'title': 'Number of days to consider for autopilot calculations. Default 7', 'min':0, 'max':100})
         form.append({'unit': '', 'form_id': 'workers', 'value': 1, 'label': 'Workers', 'id': 'AR-Workers', 'title': 'Number of concurrent rebalance workers to run at once (use a proper value for your hardware, this will increase the load on the lnd server). Default 1', 'min':1, 'max':12})
-        form.append({'unit': 'ppm', 'form_id': 'source_margin', 'value': 0, 'label': 'Source Min Diff', 'id': 'AR-SourcePPMdiff', 'title': 'Minimum fee rate difference required between target and source for helper rebalances. Default 0', 'min':0, 'max':5000})
     if 'AF-' in prefixes:
         form.append({'unit': '', 'form_id': 'af_enabled', 'value': 0, 'label': 'Autofee', 'id': 'AF-Enabled', 'title': 'Enable/Disable All Auto-fee functionality', 'min':0, 'max':1})
         form.append({'unit': '', 'form_id': 'af_inbound', 'value': 0, 'label': 'Inbound Fees', 'id': 'AF-InboundFees', 'title': 'Enable/Disable Inbound Auto-fee functionality', 'min':0, 'max':1})

@@ -45,7 +45,6 @@ urlpatterns = [
     path('rebalances', views.rebalances, name='rebalances'),
     path('rebalancing', views.rebalancing, name='rebalancing'),
     path('advanced-rebalancing', views.advanced_rebalancing, name='advanced-rebalancing'),
-    path('update_source/', views.update_source, name='update-source'),
     path('rebalanceroutes', views.rebalance_routes, name='rebalance-routes'),
     path('rebalanceroute/<int:id>', views.rebalance_route_detail, name='rebalance-route-detail'),
     path('openchannel/', views.open_channel_form, name='open-channel-form'),
