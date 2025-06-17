@@ -108,6 +108,24 @@ def get_route_limit():
         return 10
 
 @sync_to_async
+def routes_collection_enabled():
+    try:
+        setting = LocalSettings.objects.filter(key='RR-CollectRoutes').first()
+        return False if setting and setting.value == '0' else True
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting route collect setting: {str(e)}")
+        return True
+
+@sync_to_async
+def saved_routes_enabled():
+    try:
+        setting = LocalSettings.objects.filter(key='RR-UseSavedRoutes').first()
+        return False if setting and setting.value == '0' else True
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting saved route setting: {str(e)}")
+        return True
+
+@sync_to_async
 def get_saved_routes(pubkey, chan_ids, limit=10):
     try:
         cutoff = timezone.now() - timedelta(minutes=30)
@@ -125,6 +143,8 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
 @sync_to_async
 def update_route(pubkey, chan_id, route_hex, success=True):
     try:
+        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+            return
         parsed = ln.Route()
         parsed.ParseFromString(bytes.fromhex(route_hex))
         path = "-".join(h.pub_key for h in parsed.hops)
@@ -157,6 +177,8 @@ def update_route(pubkey, chan_id, route_hex, success=True):
 @sync_to_async
 def purge_stale_routes():
     try:
+        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+            return
         cutoff = timezone.now() - timedelta(days=7)
         RebalanceRoute.objects.filter(Q(last_success__lt=cutoff) | Q(last_success__isnull=True)).delete()
     except Exception as e:
@@ -165,6 +187,8 @@ def purge_stale_routes():
 @sync_to_async
 def mark_route_failure(sr):
     try:
+        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+            return
         sr.failure_count += 1
         sr.last_failure = timezone.now()
         sr.save(update_fields=['failure_count', 'last_failure'])
@@ -219,10 +243,15 @@ async def run_rebalancer(rebalance, worker):
                 f"{datetime.now().strftime('%c')} : [Rebalancer] : {worker} starting rebalance for {rebalance.target_alias} {rebalance.last_hop_pubkey} for {rebalance.value} sats and duration {rebalance.duration}, using {len(chan_ids)} outbound channels"
             )
 
-            await purge_stale_routes()
-            route_limit = await get_route_limit()
-            saved_routes = await get_saved_routes(rebalance.last_hop_pubkey, chan_ids, limit=route_limit)
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Loaded {len(saved_routes)} saved routes to try")
+            use_saved = await saved_routes_enabled()
+            if use_saved:
+                await purge_stale_routes()
+                route_limit = await get_route_limit()
+                saved_routes = await get_saved_routes(rebalance.last_hop_pubkey, chan_ids, limit=route_limit)
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Loaded {len(saved_routes)} saved routes to try")
+            else:
+                saved_routes = []
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved routes disabled")
             fee_limit_msat = int(rebalance.fee_limit * 1000)
             payment_response = None
             for sr in saved_routes:

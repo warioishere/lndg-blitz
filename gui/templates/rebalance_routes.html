@@ -10,6 +10,26 @@
     <input type="hidden" name="key" value="RR-RouteLimit">
     <input type="submit" value="Save">
   </form>
+  <form class="w3-margin-bottom" action="/update_setting/" method="post">
+    {% csrf_token %}
+    <label for="collect_routes">Collect Routes:</label>
+    <select id="collect_routes" name="value">
+      <option value="1" {% if collect_routes %}selected{% endif %}>On</option>
+      <option value="0" {% if not collect_routes %}selected{% endif %}>Off</option>
+    </select>
+    <input type="hidden" name="key" value="RR-CollectRoutes">
+    <input type="submit" value="Save">
+  </form>
+  <form class="w3-margin-bottom" action="/update_setting/" method="post">
+    {% csrf_token %}
+    <label for="use_saved">Use Saved Routes:</label>
+    <select id="use_saved" name="value">
+      <option value="1" {% if use_saved_routes %}selected{% endif %}>On</option>
+      <option value="0" {% if not use_saved_routes %}selected{% endif %}>Off</option>
+    </select>
+    <input type="hidden" name="key" value="RR-UseSavedRoutes">
+    <input type="submit" value="Save">
+  </form>
   <table class="w3-table-all w3-centered w3-hoverable">
     <thead>
       <tr>

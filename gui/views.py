@@ -1775,7 +1775,16 @@ def rebalance_routes(request):
     if request.method == 'GET':
         setting = LocalSettings.objects.filter(key='RR-RouteLimit').first()
         route_limit = setting.value if setting else 10
-        return render(request, 'rebalance_routes.html', {'route_limit': route_limit})
+        collect_setting = LocalSettings.objects.filter(key='RR-CollectRoutes').first()
+        collect_routes = False if collect_setting and collect_setting.value == '0' else True
+        use_setting = LocalSettings.objects.filter(key='RR-UseSavedRoutes').first()
+        use_saved = False if use_setting and use_setting.value == '0' else True
+        context = {
+            'route_limit': route_limit,
+            'collect_routes': collect_routes,
+            'use_saved_routes': use_saved,
+        }
+        return render(request, 'rebalance_routes.html', context)
     else:
         return redirect('home')
 
@@ -2453,6 +2462,18 @@ def update_setting(request):
                 setting.value = target
                 setting.save()
                 messages.success(request, 'Route limit updated to: ' + str(target))
+            elif key == 'RR-CollectRoutes':
+                target = '1' if str(value) == '1' else '0'
+                setting, _ = LocalSettings.objects.get_or_create(key='RR-CollectRoutes', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Route collecting ' + ('enabled' if target == '1' else 'disabled'))
+            elif key == 'RR-UseSavedRoutes':
+                target = '1' if str(value) == '1' else '0'
+                setting, _ = LocalSettings.objects.get_or_create(key='RR-UseSavedRoutes', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Saved route usage ' + ('enabled' if target == '1' else 'disabled'))
             else:
                 messages.error(request, 'Invalid Request. Please try again. [' + key +']')
         else:
