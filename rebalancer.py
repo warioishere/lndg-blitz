@@ -77,7 +77,6 @@ FAILURE_DETAIL_NAMES = {
     22: "CIRCULAR_ROUTE",
 }
 
-@sync_to_async
 def get_inflight_pubkeys():
     try:
         return list(
@@ -92,8 +91,9 @@ def get_inflight_pubkeys():
 @sync_to_async
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
+        inflight = get_inflight_pubkeys()
         active = {}
-        for r in Rebalancer.objects.filter(status__in=[0,1]):
+        for r in Rebalancer.objects.filter(last_hop_pubkey__in=inflight):
             try:
                 targets = json.loads(r.allowed_targets)
             except Exception:
@@ -558,8 +558,9 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Outbound%', value='75').save()
         if not LocalSettings.objects.filter(key='AR-Inbound%').exists():
             LocalSettings(key='AR-Inbound%', value='90').save()
+        inflight = get_inflight_pubkeys()
         active = {}
-        for r in Rebalancer.objects.filter(status__in=[0,1]):
+        for r in Rebalancer.objects.filter(last_hop_pubkey__in=inflight):
             try:
                 targets = json.loads(r.allowed_targets)
             except Exception:
