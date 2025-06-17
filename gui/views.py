@@ -1790,7 +1790,7 @@ def rebalance_routes(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
-def rebalance_sources(request):
+def advanced_rebalancing(request):
     if request.method == 'GET':
         inflight = get_inflight_pubkeys()
         setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
@@ -1809,7 +1809,7 @@ def rebalance_sources(request):
             'sources': sources,
             'base_margin': base
         }
-        return render(request, 'rebalance_sources.html', context)
+        return render(request, 'advanced_rebalancing.html', context)
     else:
         return redirect('home')
 
@@ -1829,7 +1829,7 @@ def update_source(request):
                 except Exception:
                     pass
             chan.save()
-        return redirect('rebalance-sources')
+        return redirect('advanced-rebalancing')
     else:
         return redirect('home')
 
