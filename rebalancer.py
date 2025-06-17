@@ -92,7 +92,16 @@ def get_inflight_pubkeys():
 @sync_to_async
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
-        active = {r.last_hop_pubkey: r.allow_source for r in Rebalancer.objects.filter(status__in=[0,1])}
+        active = {}
+        for r in Rebalancer.objects.filter(status__in=[0,1]):
+            try:
+                targets = json.loads(r.allowed_targets)
+            except Exception:
+                targets = []
+            active[r.last_hop_pubkey] = {
+                'allow': r.allow_source,
+                'targets': targets,
+            }
         target_fee = Channels.objects.filter(remote_pubkey=rebalance.last_hop_pubkey).first().local_fee_rate
         margin = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
         candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=rebalance.last_hop_pubkey)
@@ -100,9 +109,12 @@ def get_out_cans(rebalance, auto_rebalance_channels):
         for c in candidates:
             allowed = True
             if c.remote_pubkey in active:
-                if not active[c.remote_pubkey]:
+                data = active[c.remote_pubkey]
+                if not data['allow']:
                     allowed = False
                 elif target_fee <= c.local_fee_rate + margin:
+                    allowed = False
+                elif data['targets'] and rebalance.last_hop_pubkey not in data['targets']:
                     allowed = False
             if allowed:
                 chans.append(c.chan_id)
@@ -546,7 +558,16 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Outbound%', value='75').save()
         if not LocalSettings.objects.filter(key='AR-Inbound%').exists():
             LocalSettings(key='AR-Inbound%', value='90').save()
-        active = {r.last_hop_pubkey: r.allow_source for r in Rebalancer.objects.filter(status__in=[0,1])}
+        active = {}
+        for r in Rebalancer.objects.filter(status__in=[0,1]):
+            try:
+                targets = json.loads(r.allowed_targets)
+            except Exception:
+                targets = []
+            active[r.last_hop_pubkey] = {
+                'allow': r.allow_source,
+                'targets': targets,
+            }
         already_scheduled = list(active.keys())
         inbound_cans = auto_rebalance_channels.filter(auto_rebalance=True, inbound_can__gte=1).exclude(remote_pubkey__in=already_scheduled).order_by('-inbound_can')
         if len(inbound_cans) == 0:
@@ -578,9 +599,12 @@ def auto_schedule() -> List[Rebalancer]:
             for c in candidates:
                 allowed = True
                 if c.remote_pubkey in active:
-                    if not active[c.remote_pubkey]:
+                    data = active[c.remote_pubkey]
+                    if not data['allow']:
                         allowed = False
                     elif target.local_fee_rate <= c.local_fee_rate + margin:
+                        allowed = False
+                    elif data['targets'] and target.remote_pubkey not in data['targets']:
                         allowed = False
                 if allowed:
                     outbound_cans.append(c.chan_id)

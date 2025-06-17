@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, render, redirect
+import json
 from django.db.models import Sum, IntegerField, Count, Max, F, Q, Case, When, Value, FloatField, ExpressionWrapper, DateTimeField, DurationField, OuterRef, Subquery
 from django.db.models.functions import Round, TruncDay, Coalesce
 from django.contrib.auth.decorators import login_required
@@ -1793,14 +1794,19 @@ def rebalance_sources(request):
     if request.method == 'GET':
         active = Rebalancer.objects.filter(status__lt=2)
         sources = []
-        for r in active:
-            chan = Channels.objects.filter(remote_pubkey=r.last_hop_pubkey).first()
-            if chan:
-                r.channel = chan
-                sources.append(r)
         setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
         if not setting:
             setting = LocalSettings.objects.create(key='AR-SourcePPMdiff', value='0')
+        margin = int(setting.value)
+        for r in active:
+            chan = Channels.objects.filter(remote_pubkey=r.last_hop_pubkey).first()
+            if not chan:
+                continue
+            r.channel = chan
+            r.allowed_list = json.loads(r.allowed_targets) if r.allowed_targets else []
+            r.target_options = Channels.objects.filter(is_active=True, is_open=True, private=False,
+                                                     local_fee_rate__gt=chan.local_fee_rate + margin).order_by('alias')
+            sources.append(r)
         context = {
             'rebalances': sources,
             'settings': [{'unit':'ppm','form_id':'source_margin','value':setting.value,'label':'Source Min Diff','id':'AR-SourcePPMdiff','title':'Minimum fee rate difference required between target and source for helper rebalances','min':0,'max':5000}]
@@ -1813,10 +1819,14 @@ def rebalance_sources(request):
 def update_rebalance(request):
     if request.method == 'POST':
         reb_id = request.POST.get('id')
-        allow = request.POST.get('allow_source') == '1'
         if reb_id and Rebalancer.objects.filter(id=reb_id).exists():
             reb = Rebalancer.objects.get(id=reb_id)
-            reb.allow_source = allow
+            if 'allow_source' in request.POST:
+                allow = request.POST.get('allow_source') == '1'
+                reb.allow_source = allow
+            if 'allowed_targets' in request.POST:
+                targets = request.POST.getlist('allowed_targets')
+                reb.allowed_targets = json.dumps(targets)
             reb.save()
         return redirect('rebalance-sources')
     else:

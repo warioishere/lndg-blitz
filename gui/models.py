@@ -184,6 +184,7 @@ class Rebalancer(models.Model):
     manual = models.BooleanField(default=False)
     fees_paid = models.FloatField(null=True, default=None)
     allow_source = models.BooleanField(default=False)
+    allowed_targets = models.TextField(default='[]')
     class Meta:
         app_label = 'gui'
 
