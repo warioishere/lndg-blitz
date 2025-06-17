@@ -1790,7 +1790,7 @@ def rebalance_routes(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
-def rebalance_sources(request):
+def advanced_rebalancing(request):
     if request.method == 'GET':
         active = Rebalancer.objects.filter(status__lt=2)
         sources = []
@@ -1811,7 +1811,7 @@ def rebalance_sources(request):
             'rebalances': sources,
             'settings': [{'unit':'ppm','form_id':'source_margin','value':setting.value,'label':'Source Min Diff','id':'AR-SourcePPMdiff','title':'Minimum fee rate difference required between target and source for helper rebalances','min':0,'max':5000}]
         }
-        return render(request, 'rebalance_sources.html', context)
+        return render(request, 'advanced_rebalancing.html', context)
     else:
         return redirect('home')
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %} {{ block.super }} - AR Sources{% endblock %}
+{% block title %} {{ block.super }} - Advanced Rebalancing{% endblock %}
 {% block content %}
 <div class="w3-container w3-padding-small">
   <h2>Active Rebalances</h2>
@@ -44,6 +44,6 @@
   <p class="w3-small w3-padding">Leave all targets unselected to allow any eligible channel. Only channels with higher outbound fee rate than the source are shown.</p>
 </div>
 {% if settings %}
-  {% include 'local_settings.html' with settings=settings title='Helper Source' postURL='update_setting' %}
+  {% include 'local_settings.html' with settings=settings title='Advanced Rebalancing' postURL='update_setting' %}
 {% endif %}
 {% endblock %}
