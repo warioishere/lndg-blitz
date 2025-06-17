@@ -1789,6 +1789,40 @@ def rebalance_routes(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def rebalance_sources(request):
+    if request.method == 'GET':
+        active = Rebalancer.objects.filter(status__lt=2)
+        sources = []
+        for r in active:
+            chan = Channels.objects.filter(remote_pubkey=r.last_hop_pubkey).first()
+            if chan:
+                r.channel = chan
+                sources.append(r)
+        setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
+        if not setting:
+            setting = LocalSettings.objects.create(key='AR-SourcePPMdiff', value='0')
+        context = {
+            'rebalances': sources,
+            'settings': [{'unit':'ppm','form_id':'source_margin','value':setting.value,'label':'Source Min Diff','id':'AR-SourcePPMdiff','title':'Minimum fee rate difference required between target and source for helper rebalances','min':0,'max':5000}]
+        }
+        return render(request, 'rebalance_sources.html', context)
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def update_rebalance(request):
+    if request.method == 'POST':
+        reb_id = request.POST.get('id')
+        allow = request.POST.get('allow_source') == '1'
+        if reb_id and Rebalancer.objects.filter(id=reb_id).exists():
+            reb = Rebalancer.objects.get(id=reb_id)
+            reb.allow_source = allow
+            reb.save()
+        return redirect('rebalance-sources')
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def rebalance_route_detail(request, id):
     if request.method == 'GET':
         try:
@@ -2075,6 +2109,7 @@ def get_local_settings(*prefixes):
         form.append({'unit': '', 'form_id': 'autopilot', 'value': 0, 'label': 'Autopilot', 'id': 'AR-Autopilot', 'title': 'This enables or disables the Auto-Rebalance function for individual channels based on flow (automatically acts upon suggestions on this page: /actions)', 'min':0, 'max':1})
         form.append({'unit': 'days', 'form_id': 'autopilotdays', 'value': 7, 'label': 'Autopilot Days', 'id': 'AR-APDays', 'title': 'Number of days to consider for autopilot calculations. Default 7', 'min':0, 'max':100})
         form.append({'unit': '', 'form_id': 'workers', 'value': 1, 'label': 'Workers', 'id': 'AR-Workers', 'title': 'Number of concurrent rebalance workers to run at once (use a proper value for your hardware, this will increase the load on the lnd server). Default 1', 'min':1, 'max':12})
+        form.append({'unit': 'ppm', 'form_id': 'source_margin', 'value': 0, 'label': 'Source Min Diff', 'id': 'AR-SourcePPMdiff', 'title': 'Minimum fee rate difference required between target and source for helper rebalances. Default 0', 'min':0, 'max':5000})
     if 'AF-' in prefixes:
         form.append({'unit': '', 'form_id': 'af_enabled', 'value': 0, 'label': 'Autofee', 'id': 'AF-Enabled', 'title': 'Enable/Disable All Auto-fee functionality', 'min':0, 'max':1})
         form.append({'unit': '', 'form_id': 'af_inbound', 'value': 0, 'label': 'Inbound Fees', 'id': 'AF-InboundFees', 'title': 'Enable/Disable Inbound Auto-fee functionality', 'min':0, 'max':1})

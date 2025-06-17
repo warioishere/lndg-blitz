@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - AR Sources{% endblock %}
+{% block content %}
+<div class="w3-container w3-padding-small">
+  <h2>Active Rebalances</h2>
+  <table class="w3-table-all w3-centered w3-hoverable">
+    <thead>
+      <tr>
+        <th>Channel ID</th>
+        <th>Peer Alias</th>
+        <th>Helper Source</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rebalances %}
+      <tr>
+        <td><a href="/channel?={{ r.channel.chan_id }}" target="_blank">{{ r.channel.short_chan_id }}</a></td>
+        <td>{{ r.channel.alias }}</td>
+        <td style="background-color:{% if r.allow_source %}rgba(46,160,67,0.15){% else %}rgba(248,81,73,0.15){% endif %}">
+          <form action="/update_rebalance/" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="id" value="{{ r.id }}">
+            <input type="hidden" name="allow_source" value="{% if r.allow_source %}0{% else %}1{% endif %}">
+            <input type="submit" value="{% if r.allow_source %}Disable{% else %}Enable{% endif %}">
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if settings %}
+  {% include 'local_settings.html' with settings=settings title='Helper Source' postURL='update_setting' %}
+{% endif %}
+{% endblock %}

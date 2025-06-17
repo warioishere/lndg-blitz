@@ -78,9 +78,35 @@ FAILURE_DETAIL_NAMES = {
 }
 
 @sync_to_async
+def get_inflight_pubkeys():
+    try:
+        return list(
+            Rebalancer.objects
+                .filter(status__in=[0,1])
+                .values_list('last_hop_pubkey', flat=True)
+        )
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting inflight pubkeys: {str(e)}")
+        return []
+
+@sync_to_async
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
-        return list(auto_rebalance_channels.filter(auto_rebalance=False, percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=rebalance.last_hop_pubkey).values_list('chan_id', flat=True))
+        active = {r.last_hop_pubkey: r.allow_source for r in Rebalancer.objects.filter(status__in=[0,1])}
+        target_fee = Channels.objects.filter(remote_pubkey=rebalance.last_hop_pubkey).first().local_fee_rate
+        margin = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
+        candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=rebalance.last_hop_pubkey)
+        chans = []
+        for c in candidates:
+            allowed = True
+            if c.remote_pubkey in active:
+                if not active[c.remote_pubkey]:
+                    allowed = False
+                elif target_fee <= c.local_fee_rate + margin:
+                    allowed = False
+            if allowed:
+                chans.append(c.chan_id)
+        return chans
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting outbound cands: {str(e)}")
 
@@ -520,10 +546,10 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Outbound%', value='75').save()
         if not LocalSettings.objects.filter(key='AR-Inbound%').exists():
             LocalSettings(key='AR-Inbound%', value='90').save()
-        outbound_cans = list(auto_rebalance_channels.filter(auto_rebalance=False, percent_outbound__gte=F('ar_out_target')).values_list('chan_id', flat=True))
-        already_scheduled = Rebalancer.objects.exclude(last_hop_pubkey='').filter(status=0).values_list('last_hop_pubkey')
+        active = {r.last_hop_pubkey: r.allow_source for r in Rebalancer.objects.filter(status__in=[0,1])}
+        already_scheduled = list(active.keys())
         inbound_cans = auto_rebalance_channels.filter(auto_rebalance=True, inbound_can__gte=1).exclude(remote_pubkey__in=already_scheduled).order_by('-inbound_can')
-        if len(inbound_cans) == 0 or len(outbound_cans) == 0:
+        if len(inbound_cans) == 0:
             return []
         
         if LocalSettings.objects.filter(key='AR-MaxFeeRate').exists():
@@ -545,7 +571,21 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Target%', value='3').save()
         if not LocalSettings.objects.filter(key='AR-MaxCost%').exists():
             LocalSettings(key='AR-MaxCost%', value='65').save()
+        margin = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
         for target in inbound_cans:
+            candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=target.remote_pubkey)
+            outbound_cans = []
+            for c in candidates:
+                allowed = True
+                if c.remote_pubkey in active:
+                    if not active[c.remote_pubkey]:
+                        allowed = False
+                    elif target.local_fee_rate <= c.local_fee_rate + margin:
+                        allowed = False
+                if allowed:
+                    outbound_cans.append(c.chan_id)
+            if len(outbound_cans) == 0:
+                continue
             target_fee_rate = min(max_fee_rate, int(target.local_fee_rate * (target.ar_max_cost/100)))
             if target_fee_rate > 0 and target_fee_rate > target.remote_fee_rate:
                 target_value = int(target.ar_amt_target+(target.ar_amt_target*((secrets.choice(range(-1000,1001))/1000)*variance/100)))

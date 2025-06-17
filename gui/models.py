@@ -183,6 +183,7 @@ class Rebalancer(models.Model):
     payment_hash = models.CharField(max_length=64, null=True, default=None)
     manual = models.BooleanField(default=False)
     fees_paid = models.FloatField(null=True, default=None)
+    allow_source = models.BooleanField(default=False)
     class Meta:
         app_label = 'gui'
 
