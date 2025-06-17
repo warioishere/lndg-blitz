@@ -1790,44 +1790,45 @@ def rebalance_routes(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
-def advanced_rebalancing(request):
+def rebalance_sources(request):
     if request.method == 'GET':
-        active = Rebalancer.objects.filter(status__lt=2)
-        sources = []
+        inflight = get_inflight_pubkeys()
         setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
         if not setting:
             setting = LocalSettings.objects.create(key='AR-SourcePPMdiff', value='0')
-        margin = int(setting.value)
-        for r in active:
-            chan = Channels.objects.filter(remote_pubkey=r.last_hop_pubkey).first()
-            if not chan:
-                continue
-            r.channel = chan
-            r.allowed_list = json.loads(r.allowed_targets) if r.allowed_targets else []
-            r.target_options = Channels.objects.filter(is_active=True, is_open=True, private=False,
-                                                     local_fee_rate__gt=chan.local_fee_rate + margin).order_by('alias')
-            sources.append(r)
+        base = int(setting.value)
+        enabled = Channels.objects.filter(auto_rebalance=True, is_active=True, is_open=True).exclude(remote_pubkey__in=inflight)
+        sources = []
+        for c in enabled:
+            c.allowed_list = json.loads(c.ar_allowed_targets) if c.ar_allowed_targets else []
+            margin = base + (c.ar_source_margin or 0)
+            c.target_options = Channels.objects.filter(is_active=True, is_open=True, private=False,
+                                                     local_fee_rate__gt=c.local_fee_rate + margin).exclude(chan_id=c.chan_id).order_by('alias')
+            sources.append(c)
         context = {
-            'rebalances': sources,
-            'settings': [{'unit':'ppm','form_id':'source_margin','value':setting.value,'label':'Source Min Diff','id':'AR-SourcePPMdiff','title':'Minimum fee rate difference required between target and source for helper rebalances','min':0,'max':5000}]
+            'sources': sources,
+            'base_margin': base
         }
-        return render(request, 'advanced_rebalancing.html', context)
+        return render(request, 'rebalance_sources.html', context)
     else:
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
-def update_rebalance(request):
+def update_source(request):
     if request.method == 'POST':
-        reb_id = request.POST.get('id')
-        if reb_id and Rebalancer.objects.filter(id=reb_id).exists():
-            reb = Rebalancer.objects.get(id=reb_id)
+        chan_id = request.POST.get('chan_id')
+        if chan_id and Channels.objects.filter(chan_id=chan_id).exists():
+            chan = Channels.objects.get(chan_id=chan_id)
             if 'allow_source' in request.POST:
-                allow = request.POST.get('allow_source') == '1'
-                reb.allow_source = allow
+                chan.ar_allow_source = request.POST.get('allow_source') == '1'
             if 'allowed_targets' in request.POST:
-                targets = request.POST.getlist('allowed_targets')
-                reb.allowed_targets = json.dumps(targets)
-            reb.save()
+                chan.ar_allowed_targets = json.dumps(request.POST.getlist('allowed_targets'))
+            if 'source_margin' in request.POST:
+                try:
+                    chan.ar_source_margin = int(request.POST.get('source_margin'))
+                except Exception:
+                    pass
+            chan.save()
         return redirect('rebalance-sources')
     else:
         return redirect('home')

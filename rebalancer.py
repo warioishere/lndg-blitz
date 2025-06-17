@@ -92,30 +92,20 @@ def get_inflight_pubkeys():
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
         inflight = get_inflight_pubkeys()
-        active = {}
-        for r in Rebalancer.objects.filter(last_hop_pubkey__in=inflight):
-            try:
-                targets = json.loads(r.allowed_targets)
-            except Exception:
-                targets = []
-            active[r.last_hop_pubkey] = {
-                'allow': r.allow_source,
-                'targets': targets,
-            }
+        margin_base = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
         target_fee = Channels.objects.filter(remote_pubkey=rebalance.last_hop_pubkey).first().local_fee_rate
-        margin = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
         candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=rebalance.last_hop_pubkey)
         chans = []
         for c in candidates:
             allowed = True
-            if c.remote_pubkey in active:
-                data = active[c.remote_pubkey]
-                if not data['allow']:
-                    allowed = False
-                elif target_fee <= c.local_fee_rate + margin:
-                    allowed = False
-                elif data['targets'] and rebalance.last_hop_pubkey not in data['targets']:
-                    allowed = False
+            if not c.ar_allow_source or c.remote_pubkey in inflight:
+                allowed = False
+            margin = margin_base + (c.ar_source_margin or 0)
+            if target_fee <= c.local_fee_rate + margin:
+                allowed = False
+            allowed_list = json.loads(c.ar_allowed_targets) if c.ar_allowed_targets else []
+            if allowed_list and rebalance.last_hop_pubkey not in allowed_list:
+                allowed = False
             if allowed:
                 chans.append(c.chan_id)
         return chans
@@ -559,18 +549,7 @@ def auto_schedule() -> List[Rebalancer]:
         if not LocalSettings.objects.filter(key='AR-Inbound%').exists():
             LocalSettings(key='AR-Inbound%', value='90').save()
         inflight = get_inflight_pubkeys()
-        active = {}
-        for r in Rebalancer.objects.filter(last_hop_pubkey__in=inflight):
-            try:
-                targets = json.loads(r.allowed_targets)
-            except Exception:
-                targets = []
-            active[r.last_hop_pubkey] = {
-                'allow': r.allow_source,
-                'targets': targets,
-            }
-        already_scheduled = list(active.keys())
-        inbound_cans = auto_rebalance_channels.filter(auto_rebalance=True, inbound_can__gte=1).exclude(remote_pubkey__in=already_scheduled).order_by('-inbound_can')
+        inbound_cans = auto_rebalance_channels.filter(auto_rebalance=True, inbound_can__gte=1).exclude(remote_pubkey__in=inflight).order_by('-inbound_can')
         if len(inbound_cans) == 0:
             return []
         
@@ -593,20 +572,20 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Target%', value='3').save()
         if not LocalSettings.objects.filter(key='AR-MaxCost%').exists():
             LocalSettings(key='AR-MaxCost%', value='65').save()
-        margin = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
+        margin_base = int(LocalSettings.objects.filter(key='AR-SourcePPMdiff').first().value) if LocalSettings.objects.filter(key='AR-SourcePPMdiff').exists() else 0
         for target in inbound_cans:
             candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=target.remote_pubkey)
             outbound_cans = []
             for c in candidates:
                 allowed = True
-                if c.remote_pubkey in active:
-                    data = active[c.remote_pubkey]
-                    if not data['allow']:
-                        allowed = False
-                    elif target.local_fee_rate <= c.local_fee_rate + margin:
-                        allowed = False
-                    elif data['targets'] and target.remote_pubkey not in data['targets']:
-                        allowed = False
+                if not c.ar_allow_source or c.remote_pubkey in inflight:
+                    allowed = False
+                margin = margin_base + (c.ar_source_margin or 0)
+                if target.local_fee_rate <= c.local_fee_rate + margin:
+                    allowed = False
+                allowed_list = json.loads(c.ar_allowed_targets) if c.ar_allowed_targets else []
+                if allowed_list and target.remote_pubkey not in allowed_list:
+                    allowed = False
                 if allowed:
                     outbound_cans.append(c.chan_id)
             if len(outbound_cans) == 0:

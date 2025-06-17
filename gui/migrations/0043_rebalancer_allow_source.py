@@ -8,13 +8,18 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
-            model_name='rebalancer',
-            name='allow_source',
+            model_name='channels',
+            name='ar_allow_source',
             field=models.BooleanField(default=False),
         ),
         migrations.AddField(
-            model_name='rebalancer',
-            name='allowed_targets',
+            model_name='channels',
+            name='ar_allowed_targets',
             field=models.TextField(default='[]'),
+        ),
+        migrations.AddField(
+            model_name='channels',
+            name='ar_source_margin',
+            field=models.IntegerField(default=100),
         ),
     ]

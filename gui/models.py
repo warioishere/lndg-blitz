@@ -111,6 +111,9 @@ class Channels(models.Model):
     ar_in_target = models.IntegerField()
     ar_out_target = models.IntegerField()
     ar_max_cost = models.IntegerField()
+    ar_allow_source = models.BooleanField(default=False)
+    ar_allowed_targets = models.TextField(default='[]')
+    ar_source_margin = models.IntegerField(default=100)
     fees_updated = models.DateTimeField(default=timezone.now)
     auto_fees = models.BooleanField()
     notes = models.TextField(default='', blank=True)
@@ -183,8 +186,6 @@ class Rebalancer(models.Model):
     payment_hash = models.CharField(max_length=64, null=True, default=None)
     manual = models.BooleanField(default=False)
     fees_paid = models.FloatField(null=True, default=None)
-    allow_source = models.BooleanField(default=False)
-    allowed_targets = models.TextField(default='[]')
     class Meta:
         app_label = 'gui'
 
