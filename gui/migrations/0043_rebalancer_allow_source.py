@@ -12,4 +12,9 @@ class Migration(migrations.Migration):
             name='allow_source',
             field=models.BooleanField(default=False),
         ),
+        migrations.AddField(
+            model_name='rebalancer',
+            name='allowed_targets',
+            field=models.TextField(default='[]'),
+        ),
     ]
