@@ -373,7 +373,7 @@ Configure Auto-Rebalancer (AR) globally:
 
 -**Notes on AR Logic:**
 - Rebalances aim to decrease inbound liquidity below the channel-specific `AR-Target%`.
-- Channels with outbound liquidity *above* the global `AR-Outbound%` can be enabled as helper sources from the **Advanced Rebalancing** page. They are used only when no rebalance for that channel is running and the target fee rate exceeds the source rate by at least `AR-SourcePPMdiff`.
+- Channels with outbound liquidity *above* the global `AR-Outbound%` can be enabled as helper sources from the **Advanced Rebalancing** page. Each source has a configurable minimum fee difference (default `100` ppm) and may restrict which targets it assists. Only targets whose fee rate exceeds the source rate by this margin are eligible, and the source must not be currently rebalancing.
 - Successful attempts or failures due to incorrect payment info are retried immediately.
 - Other failures trigger a wait period (`AR-WaitPeriod`) before retrying on that channel.
 

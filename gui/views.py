@@ -31,6 +31,7 @@ from secrets import token_bytes
 from trade import create_trade_details
 import af
 from rebalancer import get_inflight_pubkeys
+import json
 
 def graph_links():
     if LocalSettings.objects.filter(key='GUI-GraphLinks').exists():
@@ -1793,17 +1794,32 @@ def rebalance_routes(request):
 def advanced_rebalancing(request):
     if request.method == 'GET':
         inflight = get_inflight_pubkeys()
-        margin_setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
-        if not margin_setting:
-            margin_setting = LocalSettings.objects.create(key='AR-SourcePPMdiff', value='0')
-        margin = int(margin_setting.value)
         channels = Channels.objects.filter(auto_rebalance=True, is_active=True, is_open=True).exclude(remote_pubkey__in=inflight)
+        channel_data = []
         for c in channels:
-            setting = LocalSettings.objects.filter(key=f'AR-SRC-{c.chan_id}').first()
-            c.allow_source = False if not setting else setting.value == '1'
+            allow_setting = LocalSettings.objects.filter(key=f'AR-SRC-{c.chan_id}').first()
+            allow_source = True if allow_setting and allow_setting.value == '1' else False
+            margin_setting = LocalSettings.objects.filter(key=f'AR-SRC-DIFF-{c.chan_id}').first()
+            margin = int(margin_setting.value) if margin_setting else 100
+            targets_setting = LocalSettings.objects.filter(key=f'AR-SRC-TARGETS-{c.chan_id}').first()
+            allowed_targets = json.loads(targets_setting.value) if targets_setting and targets_setting.value else []
+            target_options = Channels.objects.filter(
+                auto_rebalance=True,
+                is_active=True,
+                is_open=True,
+                local_fee_rate__gt=c.local_fee_rate + margin
+            ).exclude(remote_pubkey__in=inflight).exclude(remote_pubkey=c.remote_pubkey)
+            channel_data.append({
+                'chan_id': c.chan_id,
+                'short_chan_id': c.short_chan_id,
+                'alias': c.alias,
+                'allow_source': allow_source,
+                'margin': margin,
+                'allowed_targets': [str(t) for t in allowed_targets],
+                'target_options': target_options,
+            })
         context = {
-            'channels': channels,
-            'margin': margin
+            'channels': channel_data,
         }
         return render(request, 'advanced_rebalancing.html', context)
     else:
@@ -1817,12 +1833,15 @@ def update_source(request):
             if 'allow_source' in request.POST:
                 value = '1' if request.POST.get('allow_source') == '1' else '0'
                 LocalSettings.objects.update_or_create(key=f'AR-SRC-{chan_id}', defaults={'value': value})
-        if 'source_margin' in request.POST:
-            try:
-                margin = int(request.POST.get('source_margin'))
-                LocalSettings.objects.update_or_create(key='AR-SourcePPMdiff', defaults={'value': str(margin)})
-            except Exception:
-                pass
+            if 'source_margin' in request.POST:
+                try:
+                    margin = int(request.POST.get('source_margin'))
+                except Exception:
+                    margin = 100
+                LocalSettings.objects.update_or_create(key=f'AR-SRC-DIFF-{chan_id}', defaults={'value': str(margin)})
+            if 'allowed_targets' in request.POST:
+                targets = request.POST.getlist('allowed_targets')
+                LocalSettings.objects.update_or_create(key=f'AR-SRC-TARGETS-{chan_id}', defaults={'value': json.dumps(targets)})
         return redirect('advanced-rebalancing')
     else:
         return redirect('home')

@@ -9,31 +9,38 @@
         <th>Channel ID</th>
         <th>Peer Alias</th>
         <th>Helper Source</th>
+        <th>Min Diff (ppm)</th>
+        <th>Allowed Targets</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
       {% for c in channels %}
+      <form action="/update_source/" method="post" style="display:contents;">
+      {% csrf_token %}
       <tr>
         <td><a href="/channel?={{ c.chan_id }}" target="_blank">{{ c.short_chan_id }}</a></td>
         <td>{{ c.alias }}</td>
         <td style="background-color:{% if c.allow_source %}rgba(46,160,67,0.15){% else %}rgba(248,81,73,0.15){% endif %}">
-          <form action="/update_source/" method="post">
-            {% csrf_token %}
-            <input type="hidden" name="chan_id" value="{{ c.chan_id }}">
-            <input type="hidden" name="allow_source" value="{% if c.allow_source %}0{% else %}1{% endif %}">
-            <input type="submit" value="{% if c.allow_source %}Disable{% else %}Enable{% endif %}">
-          </form>
+          <input type="checkbox" name="allow_source" value="1" {% if c.allow_source %}checked{% endif %}>
+        </td>
+        <td><input type="number" name="source_margin" value="{{ c.margin }}" min="0" max="5000" style="width:80px"></td>
+        <td>
+          <select name="allowed_targets" multiple size="3">
+            {% for t in c.target_options %}
+            <option value="{{ t.chan_id }}" {% if t.chan_id|stringformat:'s' in c.allowed_targets %}selected{% endif %}>{{ t.alias }} ({{ t.short_chan_id }})</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>
+          <input type="hidden" name="chan_id" value="{{ c.chan_id }}">
+          <input type="submit" value="Save">
         </td>
       </tr>
+      </form>
       {% endfor %}
     </tbody>
   </table>
-  <form class="w3-margin-top" action="/update_source/" method="post">
-    {% csrf_token %}
-    <label>Minimum fee rate difference (ppm)</label>
-    <input type="number" name="source_margin" value="{{ margin }}" min="0" max="5000" style="width:80px">
-    <input type="submit" value="Save">
-  </form>
-  <p class="w3-small w3-padding">Channels listed are AR enabled but not currently rebalancing. Enabling one lets it provide outbound liquidity to other channels if its fee rate plus the margin is lower than the target.</p>
+  <p class="w3-small w3-padding">Channels listed are AR enabled but not currently rebalancing. Enable a channel to let it provide outbound liquidity when its fee rate plus the configured margin is lower than the target. Leaving the target list empty allows any eligible channel.</p>
 </div>
 {% endblock %}

@@ -92,10 +92,9 @@ def get_inflight_pubkeys():
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
         inflight = get_inflight_pubkeys()
-        margin_setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
-        margin = int(margin_setting.value) if margin_setting else 0
         target = Channels.objects.filter(remote_pubkey=rebalance.last_hop_pubkey).first()
         target_rate = target.local_fee_rate if target else 0
+        target_id = target.chan_id if target else None
         candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=rebalance.last_hop_pubkey)
         chans = []
         for c in candidates:
@@ -103,6 +102,12 @@ def get_out_cans(rebalance, auto_rebalance_channels):
                 continue
             setting = LocalSettings.objects.filter(key=f'AR-SRC-{c.chan_id}').first()
             if not setting or setting.value != '1':
+                continue
+            margin_setting = LocalSettings.objects.filter(key=f'AR-SRC-DIFF-{c.chan_id}').first()
+            margin = int(margin_setting.value) if margin_setting else 100
+            targets_setting = LocalSettings.objects.filter(key=f'AR-SRC-TARGETS-{c.chan_id}').first()
+            allowed_targets = json.loads(targets_setting.value) if targets_setting and targets_setting.value else []
+            if allowed_targets and (target_id is None or str(target_id) not in allowed_targets):
                 continue
             if target_rate <= c.local_fee_rate + margin:
                 continue
@@ -571,8 +576,6 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Target%', value='3').save()
         if not LocalSettings.objects.filter(key='AR-MaxCost%').exists():
             LocalSettings(key='AR-MaxCost%', value='65').save()
-        margin_setting = LocalSettings.objects.filter(key='AR-SourcePPMdiff').first()
-        base_margin = int(margin_setting.value) if margin_setting else 0
         for target in inbound_cans:
             candidates = auto_rebalance_channels.filter(percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=target.remote_pubkey)
             outbound_cans = []
@@ -582,7 +585,13 @@ def auto_schedule() -> List[Rebalancer]:
                 setting = LocalSettings.objects.filter(key=f'AR-SRC-{c.chan_id}').first()
                 if not setting or setting.value != '1':
                     continue
-                if target.local_fee_rate <= c.local_fee_rate + base_margin:
+                margin_setting = LocalSettings.objects.filter(key=f'AR-SRC-DIFF-{c.chan_id}').first()
+                margin = int(margin_setting.value) if margin_setting else 100
+                targets_setting = LocalSettings.objects.filter(key=f'AR-SRC-TARGETS-{c.chan_id}').first()
+                allowed_targets = json.loads(targets_setting.value) if targets_setting and targets_setting.value else []
+                if allowed_targets and str(target.chan_id) not in allowed_targets:
+                    continue
+                if target.local_fee_rate <= c.local_fee_rate + margin:
                     continue
                 outbound_cans.append(c.chan_id)
             if len(outbound_cans) == 0:
