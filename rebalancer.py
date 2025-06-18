@@ -18,6 +18,7 @@ from gui.models import (
     Rebalancer,
     Channels,
     LocalSettings,
+    AllowedTarget,
     Forwards,
     Autopilot,
     RebalanceRoute,
@@ -80,7 +81,20 @@ FAILURE_DETAIL_NAMES = {
 @sync_to_async
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
-        return list(auto_rebalance_channels.filter(auto_rebalance=False, percent_outbound__gte=F('ar_out_target')).exclude(remote_pubkey=rebalance.last_hop_pubkey).values_list('chan_id', flat=True))
+        exclude_keys = {rebalance.last_hop_pubkey}
+        return list(
+            auto_rebalance_channels
+            .filter(percent_outbound__gte=F('ar_out_target'))
+            .filter(
+                Q(auto_rebalance=False)
+                | Q(
+                    ar_source=True,
+                    local_fee_rate__lt=F('ar_source_ppm_diff')
+                )
+            )
+            .exclude(remote_pubkey__in=exclude_keys)
+            .values_list('chan_id', flat=True)
+        )
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting outbound cands: {str(e)}")
 
@@ -97,6 +111,18 @@ def inbound_cans_len(inbound_cans):
         return len(inbound_cans)
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting inbound cands: {str(e)}")
+
+def get_active_rebalance_pubkeys():
+    try:
+        return set(
+            Rebalancer.objects
+            .filter(status__in=[0, 1])
+            .exclude(last_hop_pubkey="")
+            .values_list("last_hop_pubkey", flat=True)
+        )
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting active pubkeys: {str(e)}")
+        return set()
 
 @sync_to_async
 def get_route_limit():
@@ -520,9 +546,30 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Outbound%', value='75').save()
         if not LocalSettings.objects.filter(key='AR-Inbound%').exists():
             LocalSettings(key='AR-Inbound%', value='90').save()
-        outbound_cans = list(auto_rebalance_channels.filter(auto_rebalance=False, percent_outbound__gte=F('ar_out_target')).values_list('chan_id', flat=True))
-        already_scheduled = Rebalancer.objects.exclude(last_hop_pubkey='').filter(status=0).values_list('last_hop_pubkey')
-        inbound_cans = auto_rebalance_channels.filter(auto_rebalance=True, inbound_can__gte=1).exclude(remote_pubkey__in=already_scheduled).order_by('-inbound_can')
+        active_pubkeys = get_active_rebalance_pubkeys()
+        outbound_cans = list(
+            auto_rebalance_channels
+            .filter(percent_outbound__gte=F('ar_out_target'))
+            .filter(
+                Q(auto_rebalance=False)
+                | Q(
+                    ar_source=True,
+                    local_fee_rate__lt=F('ar_source_ppm_diff')
+                )
+            )
+            .values_list('chan_id', flat=True)
+        )
+        already_scheduled = (
+            Rebalancer.objects.exclude(last_hop_pubkey='')
+            .filter(status__in=[0, 1])
+            .values_list('last_hop_pubkey', flat=True)
+        )
+        inbound_cans = (
+            auto_rebalance_channels
+            .filter(auto_rebalance=True, inbound_can__gte=1)
+            .exclude(remote_pubkey__in=already_scheduled)
+            .order_by('-inbound_can')
+        )
         if len(inbound_cans) == 0 or len(outbound_cans) == 0:
             return []
         
@@ -545,7 +592,46 @@ def auto_schedule() -> List[Rebalancer]:
             LocalSettings(key='AR-Target%', value='3').save()
         if not LocalSettings.objects.filter(key='AR-MaxCost%').exists():
             LocalSettings(key='AR-MaxCost%', value='65').save()
-        for target in inbound_cans:
+        allowed_map = {}
+        for entry in AllowedTarget.objects.select_related('source_chan').all():
+            allowed_map.setdefault(entry.source_chan.chan_id, []).append(entry.target_pubkey)
+
+        inbound_list = list(inbound_cans)
+        scheduled_targets = set()
+
+        for source_id, pubs in allowed_map.items():
+            if source_id not in outbound_cans:
+                continue
+            for pub in pubs:
+                if pub in active_pubkeys or pub in already_scheduled:
+                    continue
+                target = next((c for c in inbound_list if c.remote_pubkey == pub), None)
+                if not target:
+                    continue
+                target_fee_rate = min(max_fee_rate, int(target.local_fee_rate * (target.ar_max_cost/100)))
+                if target_fee_rate <= target.remote_fee_rate:
+                    continue
+                target_value = int(target.ar_amt_target+(target.ar_amt_target*((secrets.choice(range(-1000,1001))/1000)*variance/100)))
+                target_fee = round(target_fee_rate*target_value*0.000001, 3) if target_fee_rate <= max_fee_rate else round(max_fee_rate*target_value*0.000001, 3)
+                if target_fee == 0:
+                    continue
+                if LocalSettings.objects.filter(key='AR-Time').exists():
+                    target_time = int(LocalSettings.objects.filter(key='AR-Time')[0].value)
+                else:
+                    LocalSettings(key='AR-Time', value='5').save()
+                    target_time = 5
+                if Rebalancer.objects.filter(last_hop_pubkey=pub).exclude(status=0).exists():
+                    last_rebalance = Rebalancer.objects.filter(last_hop_pubkey=pub).exclude(status=0).order_by('-id')[0]
+                    if not (last_rebalance.status == 2 or (last_rebalance.status > 2 and (int((datetime.now() - last_rebalance.stop).total_seconds() / 60) > wait_period)) or (last_rebalance.status == 1 and ((int((datetime.now() - last_rebalance.start).total_seconds() / 60) - last_rebalance.duration) > wait_period))):
+                        continue
+                new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str([source_id]), last_hop_pubkey=pub, target_alias=target.alias, duration=target_time)
+                new_rebalance.save()
+                to_schedule.append(new_rebalance)
+                scheduled_targets.add(pub)
+
+        for target in inbound_list:
+            if target.remote_pubkey in scheduled_targets:
+                continue
             target_fee_rate = min(max_fee_rate, int(target.local_fee_rate * (target.ar_max_cost/100)))
             if target_fee_rate > 0 and target_fee_rate > target.remote_fee_rate:
                 target_value = int(target.ar_amt_target+(target.ar_amt_target*((secrets.choice(range(-1000,1001))/1000)*variance/100)))

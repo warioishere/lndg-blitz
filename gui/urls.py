@@ -74,6 +74,7 @@ urlpatterns = [
     path('inbound-fee-log/', views.inbound_fee_log, name='inbound-fee-log'),
     path('peerevents', views.peerevents, name='peerevents'),
     path('advanced/', views.advanced, name='advanced'),
+    path('advanced_rebalancing', views.advanced_rebalancing, name='advanced-rebalancing'),
     path('logs/', views.logs, name='logs'),
     path('addresses/', views.addresses, name='addresses'),
     path('reset/', views.reset, name='reset'),

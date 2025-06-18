@@ -30,9 +30,11 @@
     <input type="hidden" name="key" value="RR-UseSavedRoutes">
     <input type="submit" value="Save">
   </form>
+  <button class="w3-button w3-red w3-margin-bottom" onclick="deleteSelected()">Delete Selected</button>
   <table class="w3-table-all w3-centered w3-hoverable">
     <thead>
       <tr>
+        <th><input onclick="[...document.getElementsByClassName('route-select')].forEach(el => el.checked = this.checked)" class="w3-check" type="checkbox"/></th>
         <th>Target Pubkey</th>
         <th>Outgoing Chan ID</th>
         <th>Success Ratio</th>
@@ -61,7 +63,8 @@ async function loadRoutes(){
     });
     res.results.forEach(r => {
       const row = table.insertRow();
-      row.objId = r.id;
+      row.dataset.id = r.id;
+      row.insertCell().innerHTML = `<input class="w3-check route-select" value="${r.id}" type="checkbox">`;
       row.insertCell().innerText = (r.target_alias ? r.target_alias + ' - ' : '') + r.target_pubkey;
       row.insertCell().innerText = (r.outgoing_alias ? r.outgoing_alias + ' - ' : '') + r.outgoing_chan_id;
       row.insertCell().innerText = (r.success_ratio*100).toFixed(1)+'%';
@@ -89,5 +92,15 @@ async function loadRoutes(){
 }
 
 document.addEventListener('DOMContentLoaded', loadRoutes);
+
+async function deleteSelected(){
+  const ids = [...document.getElementsByClassName('route-select')].filter(c=>c.checked).map(c=>c.value);
+  if(ids.length == 0 || !confirm(`Delete ${ids.length} route(s)?`)) return;
+  for(const id of ids){
+    await DELETE(`rebalanceroutes/${id}`);
+    const row = document.querySelector(`tr[data-id='${id}']`);
+    if(row) row.remove();
+  }
+}
 </script>
 {% endblock %}
