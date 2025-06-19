@@ -2623,14 +2623,10 @@ def update_setting(request):
                 target = int(value)
                 channels = Channels.objects.filter(is_open=True, private=False).update(auto_fees=target)
                 messages.success(request, 'Auto Fees setting for all channels updated to a value of: ' + str(target))
-                try:
-                    db_enabled = LocalSettings.objects.get(key='AF-UpdateHours')
-                except:
-                    LocalSettings(key='AF-UpdateHours', value='24').save()
-                    db_enabled = LocalSettings.objects.get(key='AF-UpdateHours')
+                db_enabled, _ = LocalSettings.objects.get_or_create(key='AF-Enabled', defaults={'value': target})
                 db_enabled.value = target
                 db_enabled.save()
-                messages.success(request, 'Updated autofees update hours setting to: ' + str(target))
+                messages.success(request, 'Auto Fees globally ' + ('enabled' if target else 'disabled'))
             elif key == 'RR-RouteLimit':
                 target = int(value)
                 setting, _ = LocalSettings.objects.get_or_create(key='RR-RouteLimit', defaults={'value': target})
