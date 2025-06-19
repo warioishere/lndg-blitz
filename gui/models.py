@@ -111,6 +111,8 @@ class Channels(models.Model):
     ar_in_target = models.IntegerField()
     ar_out_target = models.IntegerField()
     ar_max_cost = models.IntegerField()
+    ar_source = models.BooleanField(default=False)
+    ar_source_ppm_diff = models.IntegerField(default=0)
     fees_updated = models.DateTimeField(default=timezone.now)
     auto_fees = models.BooleanField()
     notes = models.TextField(default='', blank=True)
@@ -155,6 +157,15 @@ class Channels(models.Model):
 
     class Meta:
         app_label = 'gui'
+
+
+class AllowedTarget(models.Model):
+    source_chan = models.ForeignKey(Channels, on_delete=models.CASCADE)
+    target_pubkey = models.CharField(max_length=66)
+
+    class Meta:
+        app_label = 'gui'
+        unique_together = (('source_chan', 'target_pubkey'),)
 
 class Peers(models.Model):
     pubkey = models.CharField(max_length=66, primary_key=True)

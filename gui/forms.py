@@ -87,6 +87,8 @@ updates_channel_codes = [
     (11, 'max_htlc'),
     (12, 'inbound_base_fee'),
     (13, 'inbound_fee_rate'),
+    (14, 'ar_source'),
+    (15, 'ar_source_ppm_diff'),
 ]
 
 class UpdateChannel(forms.Form):

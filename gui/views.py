@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, render, redirect
-from django.db.models import Sum, IntegerField, Count, Max, F, Q, Case, When, Value, FloatField, ExpressionWrapper, DateTimeField, DurationField, OuterRef, Subquery
+from django.db.models import Sum, IntegerField, Count, Max, F, Q, Case, When, Value, FloatField, ExpressionWrapper, DateTimeField, DurationField, OuterRef, Subquery, Prefetch
 from django.db.models.functions import Round, TruncDay, Coalesce
 from django.contrib.auth.decorators import login_required
 from django_filters import FilterSet, CharFilter, DateTimeFilter, NumberFilter
@@ -12,7 +12,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
-from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, calc_success_ratio
+from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, calc_success_ratio
 from gui.node_cache import get_node_info_cached
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
@@ -240,6 +240,111 @@ def advanced(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def advanced_rebalancing(request):
+    if request.method == 'POST':
+        source_chan_id = request.POST.get('source_chan_id')
+        targets = request.POST.getlist('targets')
+        action = request.POST.get('action', 'Rebalance')
+        value = int(request.POST.get('value', 0))
+        fee_limit = float(request.POST.get('fee_limit', 0))
+        duration = int(request.POST.get('duration', 1))
+        try:
+            source = Channels.objects.get(chan_id=source_chan_id)
+        except Channels.DoesNotExist:
+            messages.error(request, 'Invalid channel id.')
+            return redirect('advanced-rebalancing')
+
+        if action == 'Save Targets':
+            AllowedTarget.objects.filter(source_chan=source).delete()
+            for pubkey in targets:
+                AllowedTarget(source_chan=source, target_pubkey=pubkey).save()
+            messages.success(request, 'Allowed targets updated.')
+            return redirect('advanced-rebalancing')
+
+        if not targets:
+            targets = list(
+                Channels.objects.filter(
+                    is_open=True,
+                    auto_rebalance=True,
+                    ar_source=False,
+                    local_fee_rate__gte=source.local_fee_rate + source.ar_source_ppm_diff,
+                )
+                .exclude(chan_id=source_chan_id)
+                .exclude(remote_pubkey=source.remote_pubkey)
+                .values_list('remote_pubkey', flat=True)
+                .distinct()
+            )
+
+        count = 0
+        for pubkey in targets:
+            alias = Channels.objects.filter(remote_pubkey=pubkey).first()
+            target_alias = alias.alias if alias else ''
+            Rebalancer(
+                value=value,
+                fee_limit=fee_limit,
+                outgoing_chan_ids=str([source_chan_id]),
+                last_hop_pubkey=pubkey,
+                target_alias=target_alias,
+                duration=duration,
+                manual=True,
+            ).save()
+            count += 1
+
+        messages.success(request, f'{count} rebalance request{"s" if count != 1 else ""} created!')
+        return redirect('advanced-rebalancing')
+    elif request.method == 'GET':
+        channels = (
+            Channels.objects.filter(is_open=True, auto_rebalance=True)
+            .prefetch_related(
+                Prefetch(
+                    "allowedtarget_set",
+                    queryset=AllowedTarget.objects.all(),
+                    to_attr="allowed_targets",
+                )
+            )
+        )
+        sources = []
+        for ch in channels:
+            diff = ch.ar_source_ppm_diff or 0
+            allowed = {at.target_pubkey for at in getattr(ch, "allowed_targets", [])}
+            targets = []
+            seen = set()
+            for t in (
+                Channels.objects.filter(
+                    is_open=True, auto_rebalance=True, ar_source=False
+                )
+                .exclude(chan_id=ch.chan_id)
+                .exclude(remote_pubkey=ch.remote_pubkey)
+                .filter(local_fee_rate__gte=ch.local_fee_rate + diff)
+            ):
+                if t.remote_pubkey in seen:
+                    continue
+                seen.add(t.remote_pubkey)
+                targets.append({"obj": t, "allowed": t.remote_pubkey in allowed})
+            limit_ppm = int(ch.local_fee_rate * (ch.ar_max_cost / 100))
+            out_percent = 0
+            if ch.capacity:
+                local_bal = ch.local_balance + ch.pending_outbound
+                out_percent = int(round((local_bal / ch.capacity) * 100))
+            sources.append(
+                {
+                    "channel": ch,
+                    "targets": targets,
+                    "limit": limit_ppm,
+                    "out_percent": out_percent,
+                }
+            )
+        context = {
+            'sources': sources,
+            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
+            'graph_links': graph_links(),
+            'network_links': network_links(),
+        }
+        return render(request, 'advanced_rebalancing.html', context)
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def logs(request):
     if request.method == 'GET':
         try:
@@ -274,7 +379,16 @@ def route(request):
             stub = lnrpc.LightningStub(lnd_connect())
             block_height = stub.GetInfo(ln.GetInfoRequest()).block_height
             payment_hash = request.GET.urlencode()[1:]
-            route = PaymentHops.objects.filter(payment_hash=payment_hash).annotate(ppm=Round((Sum('fee')/Sum('amt'))*1000000, output_field=IntegerField())) if PaymentHops.objects.filter(payment_hash=payment_hash).exists() else None
+            route_qs = PaymentHops.objects.filter(payment_hash=payment_hash)
+            if route_qs.exists():
+                route = route_qs.order_by('attempt_id', 'step').annotate(
+                    ppm=Round(
+                        (Sum('fee') / Sum('amt')) * 1000000,
+                        output_field=IntegerField(),
+                    )
+                )
+            else:
+                route = None
             total_cost = round(route.aggregate(Sum('fee'))['fee__sum'],3) if route is not None else 0
             total_ppm = int(total_cost*1000000/route.filter(step=1).aggregate(Sum('amt'))['amt__sum']) if route is not None else 0
             context = {
@@ -298,9 +412,21 @@ def routes(request):
     if request.method == 'GET':
         try:
             pubkey = request.GET.urlencode()[1:]
+            payment_hashes = (
+                PaymentHops.objects.filter(node_pubkey=pubkey)
+                .order_by('-id')
+                .values_list('payment_hash', flat=True)[:69]
+            )
             context = {
                 'payment_hash': pubkey,
-                'route': PaymentHops.objects.filter(payment_hash__in=PaymentHops.objects.filter(node_pubkey=pubkey).order_by('-id').values_list('payment_hash')[:69]).annotate(ppm=Round((Sum('fee')/Sum('amt'))*1000000, output_field=IntegerField()))
+                'route': PaymentHops.objects.filter(payment_hash__in=payment_hashes)
+                .order_by('attempt_id', 'step')
+                .annotate(
+                    ppm=Round(
+                        (Sum('fee') / Sum('amt')) * 1000000,
+                        output_field=IntegerField(),
+                    )
+                ),
             }
             return render(request, 'route.html', context)
         except Exception as e:
@@ -1796,21 +1922,62 @@ def rebalance_route_detail(request, id):
             info = get_self_info()
             self_pubkey = info.identity_pubkey
             self_alias = info.alias
-            hops = []
+
+            route_hops = []
             for step, pub in enumerate(record.route.split('-'), start=1):
-                alias = ''
                 if pub == self_pubkey:
                     alias = self_alias
                 else:
                     peer = Peers.objects.filter(pubkey=pub).first()
                     alias = peer.alias if peer else ''
-                hops.append({
+                route_hops.append({
                     'attempt_id': 1,
                     'step': step,
                     'alias': alias,
                     'pubkey': pub,
                 })
-            return render(request, 'saved_route.html', {'route': hops})
+
+
+            potential = (
+                Rebalancer.objects
+                .filter(
+                    last_hop_pubkey=record.target_pubkey,
+                    outgoing_chan_ids__contains=str(record.outgoing_chan_id),
+                    status=2,
+                    payment_hash__isnull=False,
+                )
+                .order_by('-id')
+            )
+
+            rebalances = []
+            route_list = record.route.split('-')
+            for reb in potential:
+                hop_rows = (
+                    PaymentHops.objects
+                    .filter(payment_hash=reb.payment_hash)
+                    .order_by('attempt_id', 'step')
+                    .values('attempt_id', 'node_pubkey')
+                )
+                if not hop_rows:
+                    continue
+                attempt_nodes = {}
+                for h in hop_rows:
+                    attempt_nodes.setdefault(h['attempt_id'], []).append(h['node_pubkey'])
+                if any(nodes == route_list for nodes in attempt_nodes.values()):
+                    rebalances.append(reb)
+                if len(rebalances) >= 5:
+                    break
+
+            invoice_hashes = [r.payment_hash for r in rebalances]
+
+            context = {
+                'route': route_hops,
+                'target_pubkey': record.target_pubkey,
+                'rebalances': rebalances,
+                'invoices': Invoices.objects.filter(r_hash__in=invoice_hashes),
+            }
+
+            return render(request, 'saved_route.html', context)
         except Exception as e:
             error = str(e)
             return render(request, 'error.html', {'error': error})
@@ -2274,6 +2441,14 @@ def update_channel(request):
                 db_channel.local_max_htlc_msat = int(target*1000)
                 db_channel.save()
                 messages.success(request, 'Max HTLC for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target))
+            elif update_target == 14:
+                db_channel.ar_source = not db_channel.ar_source
+                db_channel.save()
+                messages.success(request, 'AR source for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') set to: ' + str(db_channel.ar_source))
+            elif update_target == 15:
+                db_channel.ar_source_ppm_diff = target
+                db_channel.save()
+                messages.success(request, 'Source ppm diff for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(target))
             else:
                 messages.error(request, 'Invalid target code. Please try again.')
         else:

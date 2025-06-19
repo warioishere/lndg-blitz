@@ -351,6 +351,7 @@ Configure Auto-Rebalancer (AR) globally:
 - `AR-Inbound%`: Default inbound target (`iTarget%`) for newly monitored channels (default: 100).
 - `AR-APDays`: Number of days of historical data for Autopilot decisions (default: 7).
 - `AR-Workers`: Number of parallel rebalance attempts to run concurrently (default: 1).
+ - **AR Sources:** AR-enabled channels can be flagged as potential sources on the "Advanced Rebalancing" page. A source will be considered when its outbound fee rate is below the configured `ar_source_ppm_diff` value. The same value acts as a minimum difference when suggesting target channels. You can also select specific **allowed targets** for each source. When defined, the auto‑rebalancer uses only those channels; otherwise it picks targets automatically.
 
 ### Steps to Start the Auto-Rebalancer
 
