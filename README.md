@@ -315,6 +315,7 @@ Customize Auto-Fees (AF) behavior via the settings page:
 - `AF-Multiplier`: Multiplies the `AF-Increment` for larger fee adjustments.
  - `AF-UpdateHours`: Minimum hours between AF adjustments for a single channel (default: 24). This field accepts fractions to run more frequently; multiply by 60 to convert to minutes (e.g. `0.08` ≈ 5 minutes).
 - `AF-LowLiqLimit`: Outbound liquidity (%) threshold below which the "Low Liquidity" fee algorithm applies.
+- `AF-LowLiqBoost`: Scaling factor applied when liquidity is below `AF-LowLiqLimit` (default: 1).
 - `AF-ExcessLimit`: Outbound liquidity (%) threshold above which the "Excess Liquidity" fee algorithm applies.
 
 ### Auto-Fees Notes

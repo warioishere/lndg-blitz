@@ -54,6 +54,11 @@ def main(channels):
     else:
         LocalSettings(key='AF-ExcessLimit', value='95').save()
         excess_limit = 95
+    if LocalSettings.objects.filter(key='AF-LowLiqBoost').exists():
+        lowliq_boost = float(LocalSettings.objects.filter(key='AF-LowLiqBoost').get().value)
+    else:
+        LocalSettings(key='AF-LowLiqBoost', value='1').save()
+        lowliq_boost = 1.0
     if lowliq_limit >= excess_limit:
         print('Invalid thresholds detected, using defaults...')
         lowliq_limit = 5
@@ -196,9 +201,11 @@ def main(channels):
 
     # Define outbound adjustment calculation function
     def compute_outbound_adjustment(row):
-    # Neue Zusatz-Logik: schneller reagieren bei zu wenig Aktivität in 4h
+        deficit = max(0, lowliq_limit - row['overall_out_percent'])
+        boost = deficit / max(lowliq_limit, 1) * lowliq_boost
+        # Neue Zusatz-Logik: schneller reagieren bei zu wenig Aktivität in 4h
         if row['overall_out_percent'] <= lowliq_limit and row['total_amt_routed_in_4h'] < 1000:
-            return 1  # kleiner Schritt nach oben (1 ppm)
+            return max(1, int(multiplier * boost))
 
         if row['overall_out_percent'] <= lowliq_limit:
             return (5 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and 
