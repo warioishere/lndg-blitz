@@ -59,6 +59,11 @@ def main(channels):
     else:
         LocalSettings(key='AF-LowLiqBoost', value='1').save()
         lowliq_boost = 1.0
+    if LocalSettings.objects.filter(key='AF-LowLiqBoostAR').exists():
+        boost_ar_only = LocalSettings.objects.filter(key='AF-LowLiqBoostAR').get().value == '1'
+    else:
+        LocalSettings(key='AF-LowLiqBoostAR', value='0').save()
+        boost_ar_only = False
     if lowliq_limit >= excess_limit:
         print('Invalid thresholds detected, using defaults...')
         lowliq_limit = 5
@@ -235,9 +240,11 @@ def main(channels):
 
     # Define outbound adjustment calculation function (per channel)
     def compute_outbound_adjustment(row):
-        deficit = max(0, lowliq_limit - row['out_percent'])
-        boost = deficit / max(lowliq_limit, 1) * lowliq_boost
         if row['out_percent'] <= lowliq_limit:
+            boost = 0
+            if boost_ar_only and row.get('auto_rebalance'):
+                deficit = max(0, lowliq_limit - row['out_percent'])
+                boost = deficit / max(lowliq_limit, 1) * lowliq_boost
             return max(1, int(multiplier * boost))
 
         if row['overall_out_percent'] <= lowliq_limit:
