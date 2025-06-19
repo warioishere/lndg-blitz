@@ -40,10 +40,10 @@ def main(channels):
         LocalSettings(key='AF-FailedHTLCs', value='25').save()
         failed_htlc_limit = 25
     if LocalSettings.objects.filter(key='AF-UpdateHours').exists():
-        update_hours = int(LocalSettings.objects.filter(key='AF-UpdateHours').get().value)
+        update_hours = float(LocalSettings.objects.filter(key='AF-UpdateHours').get().value)
     else:
         LocalSettings(key='AF-UpdateHours', value='24').save()
-        update_hours = 24
+        update_hours = 24.0
     if LocalSettings.objects.filter(key='AF-LowLiqLimit').exists():
         lowliq_limit = int(LocalSettings.objects.filter(key='AF-LowLiqLimit').get().value)
     else:

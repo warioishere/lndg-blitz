@@ -313,13 +313,13 @@ Customize Auto-Fees (AF) behavior via the settings page:
 - `AF-MaxRate`: Maximum fee rate (ppm) AF can set.
 - `AF-MinRate`: Minimum fee rate (ppm) AF can set.
 - `AF-Multiplier`: Multiplies the `AF-Increment` for larger fee adjustments.
-- `AF-UpdateHours`: Minimum hours between AF adjustments for a single channel (default: 24).
+ - `AF-UpdateHours`: Minimum hours between AF adjustments for a single channel (default: 24). This field accepts fractions to run more frequently; multiply by 60 to convert to minutes (e.g. `0.08` ≈ 5 minutes).
 - `AF-LowLiqLimit`: Outbound liquidity (%) threshold below which the "Low Liquidity" fee algorithm applies.
 - `AF-ExcessLimit`: Outbound liquidity (%) threshold above which the "Excess Liquidity" fee algorithm applies.
 
 ### Auto-Fees Notes
 
-1.  AF adjustments occur only if `AF-UpdateHours` have passed since the last LNDg fee update for that channel.
+1.  AF adjustments occur only if `AF-UpdateHours` have passed since the last LNDg fee update for that channel (fractions are supported).
 2.  Channels below `AF-LowLiqLimit`% outbound liquidity may see fee increases based on failed HTLCs and incoming flow.
 3.  Channels above `AF-ExcessLimit`% outbound liquidity may see fee decreases based on lack of flow or assisted revenue.
 4.  Channels between these limits adjust based on overall flow patterns.
