@@ -40,10 +40,10 @@ def main(channels):
         LocalSettings(key='AF-FailedHTLCs', value='25').save()
         failed_htlc_limit = 25
     if LocalSettings.objects.filter(key='AF-UpdateHours').exists():
-        update_hours = int(LocalSettings.objects.filter(key='AF-UpdateHours').get().value)
+        update_hours = float(LocalSettings.objects.filter(key='AF-UpdateHours').get().value)
     else:
         LocalSettings(key='AF-UpdateHours', value='24').save()
-        update_hours = 24
+        update_hours = 24.0
     if LocalSettings.objects.filter(key='AF-LowLiqLimit').exists():
         lowliq_limit = int(LocalSettings.objects.filter(key='AF-LowLiqLimit').get().value)
     else:
@@ -54,6 +54,16 @@ def main(channels):
     else:
         LocalSettings(key='AF-ExcessLimit', value='95').save()
         excess_limit = 95
+    if LocalSettings.objects.filter(key='AF-LowLiqBoost').exists():
+        lowliq_boost = float(LocalSettings.objects.filter(key='AF-LowLiqBoost').get().value)
+    else:
+        LocalSettings(key='AF-LowLiqBoost', value='1').save()
+        lowliq_boost = 1.0
+    if LocalSettings.objects.filter(key='AF-LowLiqBoostAR').exists():
+        boost_ar_only = LocalSettings.objects.filter(key='AF-LowLiqBoostAR').get().value == '1'
+    else:
+        LocalSettings(key='AF-LowLiqBoostAR', value='0').save()
+        boost_ar_only = False
     if lowliq_limit >= excess_limit:
         print('Invalid thresholds detected, using defaults...')
         lowliq_limit = 5
@@ -194,14 +204,51 @@ def main(channels):
         (group_df['total_amt_routed_out_7day'] - group_df['total_amt_routed_in_7day']) / group_df['total_capacity']
     ).where(group_df['total_capacity'] > 0, 0)
 
-    # Define outbound adjustment calculation function
+    # Define inbound adjustment calculation function
+    def compute_inbound_adjustment(row):
+        if row['overall_out_percent'] <= lowliq_limit:
+            return (-12 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and
+                                    row['total_amt_routed_in_1day'] == 0) else 0
+        elif row['overall_out_percent'] < excess_limit:
+            if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
+                return 7 * multiplier
+            elif row['group_net_routed_7day'] > 1:
+                return (-5 * multiplier) * (1 + row['group_net_routed_7day'])
+            else:
+                return 0
+        else:
+            if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
+                return 12 * multiplier
+            elif (row['group_net_routed_7day'] < 0 and
+                row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10):
+                return 12 * multiplier
+            else:
+                return 0
+
+    group_df['inbound_adjustment'] = group_df.apply(compute_inbound_adjustment, axis=1)
+
+    # Merge peer metrics back onto channels_df
+    merge_cols = [
+        'overall_out_percent', 'group_net_routed_7day',
+        'total_failed_out_1day', 'total_amt_routed_in_1day',
+        'total_amt_routed_in_7day', 'total_amt_routed_out_7day',
+        'total_amt_routed_in_4h', 'total_amt_routed_out_4h',
+        'total_revenue_7day', 'total_revenue_assist_7day',
+        'inbound_adjustment'
+    ]
+    channels_df = channels_df.merge(group_df[merge_cols], on='remote_pubkey', how='left')
+
+    # Define outbound adjustment calculation function (per channel)
     def compute_outbound_adjustment(row):
-    # Neue Zusatz-Logik: schneller reagieren bei zu wenig Aktivität in 4h
-        if row['overall_out_percent'] <= lowliq_limit and row['total_amt_routed_in_4h'] < 1000:
-            return 1  # kleiner Schritt nach oben (1 ppm)
+        if row['out_percent'] <= lowliq_limit:
+            boost = 0
+            if boost_ar_only and row.get('auto_rebalance'):
+                deficit = max(0, lowliq_limit - row['out_percent'])
+                boost = deficit / max(lowliq_limit, 1) * lowliq_boost
+            return max(1, int(multiplier * boost))
 
         if row['overall_out_percent'] <= lowliq_limit:
-            return (5 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and 
+            return (5 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and
                                     row['total_amt_routed_in_1day'] == 0) else 0
         elif row['overall_out_percent'] >= excess_limit:
             if row['total_amt_routed_in_4h'] + row['total_amt_routed_out_4h'] < 1000:
@@ -218,40 +265,13 @@ def main(channels):
         else:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
                 return -5 * multiplier
-            elif (row['group_net_routed_7day'] < 0 and 
+            elif (row['group_net_routed_7day'] < 0 and
                 row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10):
                 return -5 * multiplier
             else:
                 return 0
 
-    group_df['adjustment'] = group_df.apply(compute_outbound_adjustment, axis=1)
-
-    # Define inbound adjustment calculation function
-    def compute_inbound_adjustment(row):
-        if row['overall_out_percent'] <= lowliq_limit:
-            return (-12 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and 
-                                    row['total_amt_routed_in_1day'] == 0) else 0
-        elif row['overall_out_percent'] < excess_limit: 
-            if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
-                return 7 * multiplier
-            elif row['group_net_routed_7day'] > 1:
-                return (-5 * multiplier) * (1 + row['group_net_routed_7day'])
-            else:
-                return 0
-        else:
-            if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
-                return 12 * multiplier
-            elif (row['group_net_routed_7day'] < 0 and 
-                row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10):
-                return 12 * multiplier
-            else:
-                return 0
-
-    group_df['inbound_adjustment'] = group_df.apply(compute_inbound_adjustment, axis=1)
-
-    # Merge adjustments back to channels_df
-    channels_df = channels_df.merge(group_df[['adjustment']], on='remote_pubkey', how='left')
-    channels_df = channels_df.merge(group_df[['inbound_adjustment']], on='remote_pubkey', how='left')
+    channels_df['adjustment'] = channels_df.apply(compute_outbound_adjustment, axis=1)
 
     # Compute new outbound rates
     channels_df['new_rate'] = channels_df['local_fee_rate'] + channels_df['adjustment']

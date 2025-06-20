@@ -16,8 +16,9 @@
           {% else %}
           <div class="w3-col input" data-unit="{{sett.unit}}">
             <input class="w3-col" id="{{sett.form_id}}" name="{{sett.form_id}}" {% if sett.min %}min="{{sett.min}}" step="{{sett.min}}"{% endif %} {% if sett.max %}max="{{sett.max}}" type="number"{% endif %} value="{{sett.value}}"/>
+            {% if sett.form_id == 'af_updateHours' %}<small id="af_updateMinutes"></small>{% endif %}
           </div>
-          {% endif %}        
+          {% endif %}
         </div>
         {% endif %}
         {% endfor %}
@@ -32,3 +33,17 @@
     </div>
   </form>
 </div>
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const input = document.getElementById('af_updateHours');
+    const label = document.getElementById('af_updateMinutes');
+    if (input && label) {
+      function showMinutes() {
+        const val = parseFloat(input.value);
+        label.textContent = isNaN(val) ? '' : `(${Math.round(val * 60)} min)`;
+      }
+      input.addEventListener('input', showMinutes);
+      showMinutes();
+    }
+  });
+</script>

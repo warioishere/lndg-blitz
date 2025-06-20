@@ -60,8 +60,10 @@ class AutoFeesForm(AutoRebalanceForm):
     af_increment = forms.IntegerField(label='af_increment', required=False)
     af_multiplier = forms.IntegerField(label='af_multiplier', required=False)
     af_failedHTLCs = forms.IntegerField(label='af_failedHTLCs', required=False)
-    af_updateHours = forms.IntegerField(label='af_updateHours', required=False)
+    af_updateHours = forms.FloatField(label='af_updateHours', required=False)
     af_lowliq = forms.IntegerField(label='af_lowliq', required=False)
+    af_lowliqboost = forms.FloatField(label='af_lowliqboost', required=False)
+    af_lowliqboostar = forms.IntegerField(label='af_lowliqboostar', required=False)
     af_excess = forms.IntegerField(label='af_excess', required=False)
 
 class GUIForm(AutoFeesForm):
