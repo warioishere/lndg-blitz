@@ -17,6 +17,11 @@ class Payments(models.Model):
     rebal_chan = models.CharField(max_length=20, null=True)
     class Meta:
         app_label = 'gui'
+        indexes = [
+            models.Index(fields=['index'], name='payments_index_idx'),
+            models.Index(fields=['chan_out'], name='payments_chan_out_idx'),
+            models.Index(fields=['rebal_chan'], name='payments_rebal_chan_idx'),
+        ]
 
 class PaymentHops(models.Model):
     payment_hash = models.ForeignKey('Payments', on_delete=models.CASCADE)
@@ -32,6 +37,10 @@ class PaymentHops(models.Model):
     class Meta:
         app_label = 'gui'
         unique_together = (('payment_hash', 'attempt_id', 'step'),)
+        indexes = [
+            models.Index(fields=['chan_id'], name='paymenthops_chanid_idx'),
+            models.Index(fields=['node_pubkey'], name='paymenthops_node_pubkey_idx'),
+        ]
 
 class Invoices(models.Model):
     creation_date = models.DateTimeField()
@@ -63,6 +72,13 @@ class Forwards(models.Model):
     inbound_fee = models.FloatField()
     class Meta:
         app_label = 'gui'
+        indexes = [
+            models.Index(fields=['forward_date'], name='forwards_date_idx'),
+            models.Index(fields=['chan_id_in'], name='forwards_in_idx'),
+            models.Index(fields=['chan_id_out'], name='forwards_out_idx'),
+            models.Index(fields=['chan_id_in', 'forward_date'], name='forwards_in_date_idx'),
+            models.Index(fields=['chan_id_out', 'forward_date'], name='forwards_out_date_idx'),
+        ]
 
 class Channels(models.Model):
     remote_pubkey = models.CharField(max_length=66)
