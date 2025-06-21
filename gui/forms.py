@@ -75,6 +75,9 @@ class LocalSettingsForm(GUIForm):
     lnd_retentionDays = forms.IntegerField(label='lnd_retentionDays', required=False)
     io_enabled = forms.IntegerField(label='io_enabled', required=False)
     io_updateHours = forms.FloatField(label='io_updateHours', required=False)
+    mx_enabled = forms.IntegerField(label='mx_enabled', required=False)
+    mx_updateHours = forms.FloatField(label='mx_updateHours', required=False)
+    mx_percent = forms.IntegerField(label='mx_percent', required=False)
 
 updates_channel_codes = [
     (0, 'base_fee'),
@@ -151,4 +154,10 @@ class BatchOpenForm(forms.Form):
 class InboundOffsetForm(forms.Form):
     chan_id = forms.IntegerField(label='chan_id')
     offset = forms.IntegerField(label='offset')
+
+class MaxHtlcForm(forms.Form):
+    chan_id = forms.IntegerField(label='chan_id')
+    percent = forms.IntegerField(label='percent')
+    mx_liq_threshold = forms.IntegerField(label='mx_liq_threshold', required=False)
+    mx_liq_value = forms.IntegerField(label='mx_liq_value', required=False)
 

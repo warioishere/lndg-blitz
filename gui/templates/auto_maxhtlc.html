@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - Auto MaxHTLC{% endblock %}
+{% block content %}
+{% load humanize %}
+{% if channels %}
+<div class="w3-container w3-padding-small">
+  <h2>Auto MaxHTLC</h2>
+  <div class="w3-container w3-padding-small" style="overflow-x: scroll">
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <tr>
+        <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel ID</th>
+        <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer Alias</th>
+        <th onclick="sortTable(event.target, 2, 'int')">Channel Capacity</th>
+        <th onclick="sortTable(event.target, 3, 'int')">Outbound Liquidity</th>
+        <th>Offset %</th>
+        <th>Liq Threshold</th>
+        <th>Override Value</th>
+      </tr>
+      {% for channel in channels %}
+      <tr>
+        <td title="{{ channel.funding_txid }}:{{ channel.output_index }}"><a href="/channel?={{ channel.chan_id }}" target="_blank">{{ channel.short_chan_id }}</a></td>
+        <td title="{{ channel.remote_pubkey }}">{% if channel.private == False %}<a href="{{ graph_links }}/{{ network }}node/{{ channel.remote_pubkey }}" target="_blank">{% endif %}{% if channel.alias == '' %}{{ channel.remote_pubkey|slice:":12" }}{% else %}{{ channel.alias }}{% endif %}{% if channel.private == False %}</a>{% endif %}</td>
+        <td>{{ channel.capacity|intcomma }}</td>
+        <td>{{ channel.outbound|intcomma }}</td>
+        <td>
+          <form action="/auto-maxhtlc/" method="post">
+            {% csrf_token %}
+            <input style="text-align:center" type="number" min="0" max="100" name="percent" value="{% if channel.maxhtlc_percent %}{{ channel.maxhtlc_percent }}{% else %}{{ mx_percent }}{% endif %}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="mx_liq_threshold" value="{{ channel.mx_liq_threshold|default:0 }}">
+            <input type="hidden" name="mx_liq_value" value="{{ channel.mx_liq_value|default:0 }}">
+            <input type="hidden" name="chan_id" value="{{ channel.chan_id }}">
+          </form>
+        </td>
+        <td>
+          <form action="/auto-maxhtlc/" method="post">
+            {% csrf_token %}
+            <input style="text-align:center" type="number" min="0" name="mx_liq_threshold" value="{{ channel.mx_liq_threshold|default:0 }}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="percent" value="{% if channel.maxhtlc_percent %}{{ channel.maxhtlc_percent }}{% else %}{{ mx_percent }}{% endif %}">
+            <input type="hidden" name="mx_liq_value" value="{{ channel.mx_liq_value|default:0 }}">
+            <input type="hidden" name="chan_id" value="{{ channel.chan_id }}">
+          </form>
+        </td>
+        <td>
+          <form action="/auto-maxhtlc/" method="post">
+            {% csrf_token %}
+            <input style="text-align:center" type="number" min="0" name="mx_liq_value" value="{{ channel.mx_liq_value|default:0 }}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="percent" value="{% if channel.maxhtlc_percent %}{{ channel.maxhtlc_percent }}{% else %}{{ mx_percent }}{% endif %}">
+            <input type="hidden" name="mx_liq_threshold" value="{{ channel.mx_liq_threshold|default:0 }}">
+            <input type="hidden" name="chan_id" value="{{ channel.chan_id }}">
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="w3-container w3-padding-small">
+  <center><h1>You dont have any channels to analyze yet!</h1></center>
+</div>
+{% endif %}
+{% if local_settings %}
+{% include 'local_settings.html' with settings=local_settings title='Auto MaxHTLC' %}
+{% endif %}
+{% endblock %}

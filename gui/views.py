@@ -2103,6 +2103,62 @@ def inbound_offset(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def auto_maxhtlc(request):
+    if request.method == 'GET':
+        channels = Channels.objects.filter(is_open=True).annotate(outbound=F('local_balance') + F('pending_outbound'))
+        settings_list = get_local_settings('MX-')
+        mx_percent = 0
+        for sett in settings_list:
+            if sett['id'] == 'MX-Percent':
+                try:
+                    mx_percent = int(sett['value'])
+                except (KeyError, ValueError, TypeError):
+                    mx_percent = 0
+                break
+        context = {
+            'channels': channels.order_by('alias'),
+            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
+            'graph_links': graph_links(),
+            'network_links': network_links(),
+            'local_settings': settings_list,
+            'mx_percent': mx_percent,
+        }
+        return render(request, 'auto_maxhtlc.html', context)
+    elif request.method == 'POST':
+        form = MaxHtlcForm(request.POST)
+        if form.is_valid() and Channels.objects.filter(chan_id=form.cleaned_data['chan_id']).exists():
+            chan_id = form.cleaned_data['chan_id']
+            percent = int(form.cleaned_data['percent'])
+            mx_liq_threshold = int(form.cleaned_data.get('mx_liq_threshold') or 0)
+            mx_liq_value = int(form.cleaned_data.get('mx_liq_value') or 0)
+            db_channel = Channels.objects.get(chan_id=chan_id)
+            db_channel.maxhtlc_percent = percent
+            db_channel.mx_liq_threshold = mx_liq_threshold
+            db_channel.mx_liq_value = mx_liq_value
+            outbound = db_channel.local_balance + db_channel.pending_outbound
+            target = int(outbound * (100 - percent) / 100)
+            try:
+                stub = lnrpc.LightningStub(lnd_connect())
+                channel_point = point(db_channel)
+                stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(
+                    chan_point=channel_point,
+                    base_fee_msat=db_channel.local_base_fee,
+                    fee_rate=(db_channel.local_fee_rate/1000000),
+                    time_lock_delta=db_channel.local_cltv,
+                    max_htlc_msat=target*1000))
+                db_channel.local_max_htlc_msat = target*1000
+                db_channel.maxhtlc_updated = datetime.now()
+                db_channel.save()
+                messages.success(request, f'Max HTLC for channel {db_channel.alias} ({db_channel.chan_id}) updated to a value of: {target}')
+            except Exception as e:
+                messages.error(request, f'Error updating channel: {e}')
+        else:
+            messages.error(request, 'Invalid Request. Please try again.')
+        return redirect(request.META.get('HTTP_REFERER', '/'))
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def peerevents(request):
     if request.method == 'GET':
         try:
@@ -2309,6 +2365,10 @@ def get_local_settings(*prefixes):
     if 'IO-' in prefixes:
         form.append({'unit': '', 'form_id': 'io_enabled', 'value': 0, 'label': 'Offset Updates', 'id': 'IO-Enabled', 'title': 'Enable/Disable automatic inbound offset updates', 'min':0, 'max':1})
         form.append({'unit': 'hours', 'form_id': 'io_updateHours', 'value': 24, 'label': 'IO Update', 'id': 'IO-UpdateHours', 'title': 'Hours between applying inbound offsets. Fractions allowed. Default 24', 'min':0.01, 'max':100})
+    if 'MX-' in prefixes:
+        form.append({'unit': '', 'form_id': 'mx_enabled', 'value': 0, 'label': 'MaxHTLC Updates', 'id': 'MX-Enabled', 'title': 'Enable/Disable automatic max HTLC updates', 'min':0, 'max':1})
+        form.append({'unit': 'hours', 'form_id': 'mx_updateHours', 'value': 24, 'label': 'MX Update', 'id': 'MX-UpdateHours', 'title': 'Hours between applying max HTLC settings. Fractions allowed. Default 24', 'min':0.01, 'max':100})
+        form.append({'unit': '%', 'form_id': 'mx_percent', 'value': 0, 'label': 'Offset %', 'id': 'MX-Percent', 'title': 'Default percent below outbound liquidity when no per-channel value is set', 'min':0, 'max':100})
     if 'GUI-' in prefixes:
         form.append({'unit': '', 'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'label': 'Graph URL', 'id': 'GUI-GraphLinks', 'title': 'Preferred Graph URL. Default https://mempool.space/lightning'})
         form.append({'unit': '', 'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'label': 'NET URL', 'id': 'GUI-NetLinks', 'title': 'Preferred NET URL. Default https://mempool.space'})
@@ -2356,6 +2416,10 @@ def update_settings(request):
                     #IO
                     {'form_id': 'io_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'IO-Enabled'},
                     {'form_id': 'io_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'IO-UpdateHours'},
+                    #MX
+                    {'form_id': 'mx_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'MX-Enabled'},
+                    {'form_id': 'mx_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'MX-UpdateHours'},
+                    {'form_id': 'mx_percent', 'value': 0, 'parse': lambda x: int(x),'id': 'MX-Percent'},
                     #GUI
                     {'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'parse': lambda x: str(x),'id': 'GUI-GraphLinks'},
                     {'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'parse': lambda x: str(x),'id': 'GUI-NetLinks'},
@@ -2383,7 +2447,7 @@ def update_settings(request):
                     db_value.value = value
                     db_value.save()
 
-                    if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%']:
+                    if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%','MX-Percent']:
                         if field['id'] == 'AR-Target%':
                             Channels.objects.all().update(ar_amt_target=Round(F('capacity')*(value/100), output_field=IntegerField()))
                         elif field['id'] == 'AR-Outbound%':
@@ -2392,6 +2456,8 @@ def update_settings(request):
                             Channels.objects.all().update(ar_in_target=value)
                         elif field['id'] == 'AR-MaxCost%':
                             Channels.objects.all().update(ar_max_cost=value)
+                        elif field['id'] == 'MX-Percent':
+                            Channels.objects.all().update(maxhtlc_percent=value)
                         messages.success(request, 'All channels ' + field['id'] + ' updated to: ' + str(value))
                     else:
                         messages.success(request, field['id'] + ' updated to: ' + str(value))
