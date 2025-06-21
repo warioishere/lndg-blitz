@@ -214,10 +214,18 @@ def update_forwards(stub):
     forwards = response.forwarding_events
     if not forwards:
         return
+
+    chan_ids = set()
+    for f in forwards:
+        chan_ids.add(str(f.chan_id_in))
+        chan_ids.add(str(f.chan_id_out))
+
+    chan_map = {c.chan_id: c for c in Channels.objects.filter(chan_id__in=chan_ids)}
+
     new_forwards = []
     for forward in forwards:
-        inbound_channel = Channels.objects.get(chan_id=forward.chan_id_in) if Channels.objects.filter(chan_id=forward.chan_id_in).exists() else None
-        outbound_channel = Channels.objects.get(chan_id=forward.chan_id_out) if Channels.objects.filter(chan_id=forward.chan_id_out).exists() else None
+        inbound_channel = chan_map.get(str(forward.chan_id_in))
+        outbound_channel = chan_map.get(str(forward.chan_id_out))
         forward_datetime = datetime.fromtimestamp(forward.timestamp)
         amt_in_msat = forward.amt_in_msat
         amt_out_msat = forward.amt_out_msat
