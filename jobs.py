@@ -17,6 +17,62 @@ from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peer
 from gui.node_cache import get_node_info_cached
 import af
 
+CHANNEL_UPDATE_FIELDS = [
+    'remote_pubkey', 'short_chan_id', 'funding_txid', 'output_index', 'capacity',
+    'local_balance', 'remote_balance', 'unsettled_balance', 'local_commit',
+    'local_chan_reserve', 'num_updates', 'initiator', 'alias', 'total_sent',
+    'total_received', 'private', 'pending_outbound', 'pending_inbound',
+    'htlc_count', 'local_base_fee', 'local_fee_rate', 'local_inbound_base_fee',
+    'local_inbound_fee_rate', 'inbound_offset', 'offset_updated', 'local_disabled',
+    'local_cltv', 'local_min_htlc_msat', 'local_max_htlc_msat', 'remote_base_fee',
+    'remote_fee_rate', 'remote_inbound_base_fee', 'remote_inbound_fee_rate',
+    'remote_disabled', 'remote_cltv', 'remote_min_htlc_msat',
+    'remote_max_htlc_msat', 'push_amt', 'close_address', 'is_active', 'is_open',
+    'last_update', 'auto_rebalance', 'ar_amt_target', 'ar_in_target',
+    'ar_out_target', 'ar_max_cost', 'ar_source', 'ar_source_ppm_diff',
+    'fees_updated', 'auto_fees', 'notes'
+]
+
+
+def apply_channel_defaults(ch):
+    """Replicate Channels.save default logic without saving."""
+    if ch.auto_fees is None:
+        if LocalSettings.objects.filter(key='AF-Enabled').exists():
+            enabled = int(LocalSettings.objects.filter(key='AF-Enabled')[0].value)
+        else:
+            LocalSettings(key='AF-Enabled', value='0').save()
+            enabled = 0
+        ch.auto_fees = False if enabled == 0 else True
+    if not ch.ar_out_target:
+        if LocalSettings.objects.filter(key='AR-Outbound%').exists():
+            outbound_setting = int(LocalSettings.objects.filter(key='AR-Outbound%')[0].value)
+        else:
+            LocalSettings(key='AR-Outbound%', value='75').save()
+            outbound_setting = 75
+        ch.ar_out_target = outbound_setting
+    if not ch.ar_in_target:
+        if LocalSettings.objects.filter(key='AR-Inbound%').exists():
+            inbound_setting = int(LocalSettings.objects.filter(key='AR-Inbound%')[0].value)
+        else:
+            LocalSettings(key='AR-Inbound%', value='90').save()
+            inbound_setting = 90
+        ch.ar_in_target = inbound_setting
+    if not ch.ar_amt_target:
+        if LocalSettings.objects.filter(key='AR-Target%').exists():
+            amt_setting = float(LocalSettings.objects.filter(key='AR-Target%')[0].value)
+        else:
+            LocalSettings(key='AR-Target%', value='3').save()
+            amt_setting = 3
+        ch.ar_amt_target = int((amt_setting/100) * ch.capacity)
+    if not ch.ar_max_cost:
+        if LocalSettings.objects.filter(key='AR-MaxCost%').exists():
+            cost_setting = int(LocalSettings.objects.filter(key='AR-MaxCost%')[0].value)
+        else:
+            LocalSettings(key='AR-MaxCost%', value='65').save()
+            cost_setting = 65
+        ch.ar_max_cost = cost_setting
+
+
 def update_payments(stub):
     self_pubkey = stub.GetInfo(ln.GetInfoRequest()).identity_pubkey
     inflight_payments = Payments.objects.filter(status=1).order_by('index')
@@ -197,41 +253,44 @@ def disconnectpeer(stub, peer):
 def update_channels(stub):
     counter = 0
     chan_list = []
+    channels_to_create = []
+    channels_to_update = []
+    pending_htlcs_to_create = []
     channels = stub.ListChannels(ln.ListChannelsRequest()).channels
     PendingHTLCs.objects.all().delete()
     get_info = stub.GetInfo(ln.GetInfoRequest())
     block_height = get_info.block_height
     version = get_info.version
     for channel in channels:
+        is_new = False
         if Channels.objects.filter(chan_id=channel.chan_id).exists():
-            #Update the channel record with the most current data
             db_channel = Channels.objects.filter(chan_id=channel.chan_id)[0]
             pending_channel = None
-            # ensure alias stays in sync with peer table
             peer_alias = Peers.objects.filter(pubkey=channel.remote_pubkey).values_list('alias', flat=True).first()
             if peer_alias is not None and peer_alias != db_channel.alias:
                 db_channel.alias = peer_alias
         else:
-            #Create a record for this new channel
+            is_new = True
             try:
                 alias = get_node_info_cached(channel.remote_pubkey, stub).node.alias
             except Exception:
                 alias = ''
             channel_point = channel.channel_point
             txid, index = channel_point.split(':')
-            db_channel = Channels()
-            db_channel.remote_pubkey = channel.remote_pubkey
-            db_channel.chan_id = channel.chan_id
-            db_channel.short_chan_id = str(channel.chan_id >> 40) + 'x' + str(channel.chan_id >> 16 & 0xFFFFFF) + 'x' + str(channel.chan_id & 0xFFFF)
-            db_channel.initiator = channel.initiator
-            db_channel.alias = alias
-            db_channel.funding_txid = txid
-            db_channel.output_index = index
-            db_channel.capacity = channel.capacity
-            db_channel.private = channel.private
-            db_channel.push_amt = channel.push_amount_sat
-            db_channel.close_address = channel.close_address
-            pending_channel = PendingChannels.objects.filter(funding_txid=txid, output_index=index)[0] if PendingChannels.objects.filter(funding_txid=txid, output_index=index).exists() else None
+            db_channel = Channels(
+                remote_pubkey=channel.remote_pubkey,
+                chan_id=channel.chan_id,
+                short_chan_id=str(channel.chan_id >> 40) + 'x' + str(channel.chan_id >> 16 & 0xFFFFFF) + 'x' + str(channel.chan_id & 0xFFFF),
+                initiator=channel.initiator,
+                alias=alias,
+                funding_txid=txid,
+                output_index=index,
+                capacity=channel.capacity,
+                private=channel.private,
+                push_amt=channel.push_amount_sat,
+                close_address=channel.close_address,
+            )
+            pending_channel = PendingChannels.objects.filter(funding_txid=txid, output_index=index).first()
         # Update basic channel data
         db_channel.local_balance = channel.local_balance
         db_channel.remote_balance = channel.remote_balance
@@ -256,7 +315,7 @@ def update_channels(stub):
                 pending_htlc.expiration_height = htlc.expiration_height
                 pending_htlc.forwarding_channel = htlc.forwarding_channel
                 pending_htlc.forwarding_alias = Channels.objects.filter(chan_id=htlc.forwarding_channel)[0].alias if Channels.objects.filter(chan_id=htlc.forwarding_channel).exists() else '---'
-                pending_htlc.save()
+                pending_htlcs_to_create.append(pending_htlc)
                 if htlc.incoming == True:
                     pending_in += htlc.amount
                 else:
@@ -435,28 +494,38 @@ def update_channels(stub):
             #External Fee change detected, update auto fee log
             db_channel.fees_updated = datetime.now()
             Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Ext"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
-        db_channel.save()
+        apply_channel_defaults(db_channel)
+        if is_new:
+            channels_to_create.append(db_channel)
+        else:
+            channels_to_update.append(db_channel)
         counter += 1
         chan_list.append(channel.chan_id)
     records = Channels.objects.filter(is_open=True).count()
     if records > counter:
-        #A channel must have been closed, mark it as closed
-        channels = Channels.objects.filter(is_open=True).exclude(chan_id__in=chan_list)
+        channels = list(Channels.objects.filter(is_open=True).exclude(chan_id__in=chan_list))
         for channel in channels:
             channel.last_update = datetime.now()
             channel.is_active = False
             channel.is_open = False
-            channel.save()
+            apply_channel_defaults(channel)
+        channels_to_update.extend(channels)
+
+    if pending_htlcs_to_create:
+        PendingHTLCs.objects.bulk_create(pending_htlcs_to_create)
+    if channels_to_create:
+        Channels.objects.bulk_create(channels_to_create)
+    if channels_to_update:
+        Channels.objects.bulk_update(channels_to_update, CHANNEL_UPDATE_FIELDS)
 
 def update_peers(stub):
-    counter = 0
     peer_list = []
+    peers_to_create = []
+    peers_to_update = []
     peers = stub.ListPeers(ln.ListPeersRequest(latest_error=True)).peers
     for peer in peers:
-        exists = 1 if Peers.objects.filter(pubkey=peer.pub_key).count() == 1 else 0
-        if exists == 1:
-            db_peer = Peers.objects.filter(pubkey=peer.pub_key)[0]
-            db_peer.pubkey = peer.pub_key
+        db_peer = Peers.objects.filter(pubkey=peer.pub_key).first()
+        if db_peer:
             db_peer.address = peer.address
             db_peer.sat_sent = peer.sat_sent
             db_peer.sat_recv = peer.sat_recv
@@ -469,21 +538,19 @@ def update_peers(stub):
             if alias and (not db_peer.alias or db_peer.alias != alias):
                 db_peer.alias = alias
             db_peer.connected = True
-            db_peer.save()
-        elif exists == 0:
+            peers_to_update.append(db_peer)
+        else:
             try:
                 alias = get_node_info_cached(peer.pub_key, stub).node.alias
             except Exception:
                 alias = ''
-            Peers(pubkey = peer.pub_key, address = peer.address, sat_sent = peer.sat_sent, sat_recv = peer.sat_recv, inbound = peer.inbound, ping_time = round(peer.ping_time/1000), alias=alias, connected = True).save()
-        counter += 1
+            peers_to_create.append(Peers(pubkey=peer.pub_key, address=peer.address, sat_sent=peer.sat_sent, sat_recv=peer.sat_recv, inbound=peer.inbound, ping_time=round(peer.ping_time/1000), alias=alias, connected=True))
         peer_list.append(peer.pub_key)
-    records = Peers.objects.filter(connected=True).count()
-    if records > counter:
-        disconnected = Peers.objects.filter(connected=True).exclude(pubkey__in=peer_list)
-        for peer in disconnected:
-            peer.connected = False
-            peer.save()
+    if peers_to_create:
+        Peers.objects.bulk_create(peers_to_create)
+    if peers_to_update:
+        Peers.objects.bulk_update(peers_to_update, ['address', 'sat_sent', 'sat_recv', 'inbound', 'ping_time', 'alias', 'connected'])
+    Peers.objects.filter(connected=True).exclude(pubkey__in=peer_list).update(connected=False)
 
 def refresh_peer_aliases(stub):
     """Refresh aliases for peers without an alias."""
