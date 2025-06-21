@@ -58,3 +58,15 @@ def get_node_info_cached(pubkey, stub, expiry_minutes=60, max_entries=500):
     _memory_cache[pubkey] = (info, timezone.now())
     return info
 
+
+def cache_stats():
+    """Return current size and memory usage of the in-memory node cache."""
+    total_bytes = 0
+    for info, _ in _memory_cache.values():
+        try:
+            total_bytes += info.ByteSize()
+        except Exception:
+            # Fallback for unexpected objects
+            total_bytes += 0
+    return len(_memory_cache), total_bytes
+

@@ -254,6 +254,11 @@
 {% if local_settings %}
 {% include 'local_settings.html' with settings=local_settings title='Update Local' %}
 {% endif %}
+{% if node_cache_entries is not None %}
+<div class="w3-container w3-padding-small">
+  <small>Node cache: {{ node_cache_entries }} entries (~{{ node_cache_mb }} MB RAM)</small>
+</div>
+{% endif %}
 <script>
   document.addEventListener('DOMContentLoaded', async () => {
     const node_info = await GET('node_info', {data: {limit:1}})

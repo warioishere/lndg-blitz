@@ -13,7 +13,7 @@ from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
 from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, calc_success_ratio
-from gui.node_cache import get_node_info_cached
+from gui.node_cache import get_node_info_cached, cache_stats
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps import router_pb2 as lnr
@@ -230,11 +230,14 @@ def advanced(request):
             channels_df['local_max_htlc'] = channels_df['local_max_htlc_msat']/1000
         context = {
             'channels': channels_df.to_dict(orient='records'),
-            'local_settings': get_local_settings('AF-', 'AR-', 'GUI-', 'LND-'),
+            'local_settings': get_local_settings('AF-', 'AR-', 'GUI-', 'LND-', 'NODE_CACHE'),
             'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
             'graph_links': graph_links(),
             'network_links': network_links()
         }
+        entries, bytes_used = cache_stats()
+        context['node_cache_entries'] = entries
+        context['node_cache_mb'] = round(bytes_used / 1024 / 1024, 2)
         return render(request, 'advanced.html', context)
     else:
         return redirect('home')
@@ -2369,6 +2372,9 @@ def get_local_settings(*prefixes):
         form.append({'unit': '', 'form_id': 'mx_enabled', 'value': 0, 'label': 'MaxHTLC Updates', 'id': 'MX-Enabled', 'title': 'Enable/Disable automatic max HTLC updates', 'min':0, 'max':1})
         form.append({'unit': 'hours', 'form_id': 'mx_updateHours', 'value': 24, 'label': 'MX Update', 'id': 'MX-UpdateHours', 'title': 'Hours between applying max HTLC settings. Fractions allowed. Default 24', 'min':0.01, 'max':100})
         form.append({'unit': '%', 'form_id': 'mx_percent', 'value': 0, 'label': 'Offset %', 'id': 'MX-Percent', 'title': 'Default percent below outbound liquidity when no per-channel value is set', 'min':0, 'max':100})
+    if 'NODE_CACHE' in prefixes:
+        form.append({'unit': 'min', 'form_id': 'node_cache_expiry_minutes', 'value': 60, 'label': 'Node Cache Expiry', 'id': 'NODE_CACHE_EXPIRY_MINUTES', 'title': 'Minutes node info is cached in memory and DB before refresh', 'min':1, 'max':10080})
+        form.append({'unit': '', 'form_id': 'node_cache_max_entries', 'value': 500, 'label': 'Node Cache Size', 'id': 'NODE_CACHE_MAX_ENTRIES', 'title': 'Maximum number of node info objects kept in RAM', 'min':1, 'max':5000})
     if 'GUI-' in prefixes:
         form.append({'unit': '', 'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'label': 'Graph URL', 'id': 'GUI-GraphLinks', 'title': 'Preferred Graph URL. Default https://mempool.space/lightning'})
         form.append({'unit': '', 'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'label': 'NET URL', 'id': 'GUI-NetLinks', 'title': 'Preferred NET URL. Default https://mempool.space'})
@@ -2426,6 +2432,9 @@ def update_settings(request):
                     #LND
                     {'form_id': 'lnd_cleanPayments', 'value': 0, 'parse': lambda x: int(x), 'id': 'LND-CleanPayments'},
                     {'form_id': 'lnd_retentionDays', 'value': 30, 'parse': lambda x: int(x), 'id': 'LND-RetentionDays'},
+                    # Node Cache
+                    {'form_id': 'node_cache_expiry_minutes', 'value': 60, 'parse': lambda x: int(x), 'id': 'NODE_CACHE_EXPIRY_MINUTES'},
+                    {'form_id': 'node_cache_max_entries', 'value': 500, 'parse': lambda x: int(x), 'id': 'NODE_CACHE_MAX_ENTRIES'},
                     ]
 
         form = LocalSettingsForm(request.POST)
