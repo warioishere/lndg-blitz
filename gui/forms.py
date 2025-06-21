@@ -73,6 +73,8 @@ class GUIForm(AutoFeesForm):
 class LocalSettingsForm(GUIForm):
     lnd_cleanPayments = forms.IntegerField(label='lnd_cleanPayments', required=False)
     lnd_retentionDays = forms.IntegerField(label='lnd_retentionDays', required=False)
+    io_enabled = forms.IntegerField(label='io_enabled', required=False)
+    io_updateHours = forms.FloatField(label='io_updateHours', required=False)
 
 updates_channel_codes = [
     (0, 'base_fee'),
@@ -145,3 +147,8 @@ class BatchOpenForm(forms.Form):
     pubkey10 = forms.CharField(label='pubkey10', max_length=66, required=False)
     amt10 = forms.IntegerField(label='amt10', required=False)
     fee_rate = forms.IntegerField(label='fee_rate')
+
+class InboundOffsetForm(forms.Form):
+    chan_id = forms.IntegerField(label='chan_id')
+    offset = forms.IntegerField(label='offset')
+

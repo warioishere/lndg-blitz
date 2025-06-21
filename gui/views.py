@@ -2052,6 +2052,57 @@ def inbound_fee_log(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def inbound_offset(request):
+    if request.method == 'GET':
+        channels = Channels.objects.filter(is_open=True)
+        context = {
+            'channels': channels.order_by('alias'),
+            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
+            'graph_links': graph_links(),
+            'network_links': network_links(),
+            'local_settings': get_local_settings('IO-')
+        }
+        return render(request, 'inbound_offset.html', context)
+    elif request.method == 'POST':
+        form = InboundOffsetForm(request.POST)
+        if form.is_valid() and Channels.objects.filter(chan_id=form.cleaned_data['chan_id']).exists():
+            chan_id = form.cleaned_data['chan_id']
+            offset = form.cleaned_data['offset']
+            db_channel = Channels.objects.get(chan_id=chan_id)
+            db_channel.inbound_offset = offset
+            balance = db_channel.local_fee_rate + offset
+            target = -balance if balance > 0 else 0
+            try:
+                stub = lnrpc.LightningStub(lnd_connect())
+                version = stub.GetInfo(ln.GetInfoRequest()).version
+                if float(version[:4]) >= 0.18:
+                    channel_point = point(db_channel)
+                    inbound_base_fee = db_channel.local_inbound_base_fee if db_channel.local_inbound_base_fee else 0
+                    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(
+                        chan_point=channel_point,
+                        base_fee_msat=db_channel.local_base_fee,
+                        fee_rate=(db_channel.local_fee_rate/1000000),
+                        time_lock_delta=db_channel.local_cltv,
+                        inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target)
+                    ))
+                    old_rate = db_channel.local_inbound_fee_rate if db_channel.local_inbound_fee_rate else 0
+                    db_channel.local_inbound_fee_rate = target
+                    db_channel.offset_updated = datetime.now()
+                    db_channel.save()
+                    InboundFeeLog(chan_id=db_channel.chan_id, peer_alias=db_channel.alias,
+                                  setting='Manual Offset', old_value=old_rate, new_value=target).save()
+                    messages.success(request, f'Inbound fee rate for channel {db_channel.alias} ({db_channel.chan_id}) updated to a value of: {target}')
+                else:
+                    messages.error(request, 'LND version too low to set inbound fees, update to v0.18+')
+            except Exception as e:
+                messages.error(request, f'Error updating channel: {e}')
+        else:
+            messages.error(request, 'Invalid Request. Please try again.')
+        return redirect(request.META.get('HTTP_REFERER', '/'))
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def peerevents(request):
     if request.method == 'GET':
         try:
@@ -2255,6 +2306,9 @@ def get_local_settings(*prefixes):
         form.append({'unit': 'x', 'form_id': 'af_lowliqboost', 'value': 1, 'label': 'AF LowLiq Boost', 'id': 'AF-LowLiqBoost', 'title': 'Multiplier for extra fee bump when liquidity is below AF-LowLiqLimit. Default 1', 'min':0, 'max':10})
         form.append({'unit': '', 'form_id': 'af_lowliqboostar', 'value': 0, 'label': 'AF Boost AR Only', 'id': 'AF-LowLiqBoostAR', 'title': 'Apply boost only to channels with Auto-Rebalance enabled; Off disables the boost', 'min':0, 'max':1})
         form.append({'unit': '%', 'form_id': 'af_excess', 'value': 95, 'label': 'AF Excess', 'id': 'AF-ExcessLimit', 'title': 'Limit for running excess liq AF rules (decrease for stagnant channels and those with assisting revenues). Default 95', 'min':0, 'max':100})
+    if 'IO-' in prefixes:
+        form.append({'unit': '', 'form_id': 'io_enabled', 'value': 0, 'label': 'Offset Updates', 'id': 'IO-Enabled', 'title': 'Enable/Disable automatic inbound offset updates', 'min':0, 'max':1})
+        form.append({'unit': 'hours', 'form_id': 'io_updateHours', 'value': 24, 'label': 'IO Update', 'id': 'IO-UpdateHours', 'title': 'Hours between applying inbound offsets. Fractions allowed. Default 24', 'min':0.01, 'max':100})
     if 'GUI-' in prefixes:
         form.append({'unit': '', 'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'label': 'Graph URL', 'id': 'GUI-GraphLinks', 'title': 'Preferred Graph URL. Default https://mempool.space/lightning'})
         form.append({'unit': '', 'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'label': 'NET URL', 'id': 'GUI-NetLinks', 'title': 'Preferred NET URL. Default https://mempool.space'})
@@ -2299,6 +2353,9 @@ def update_settings(request):
                     {'form_id': 'af_lowliqboost', 'value': 1, 'parse': lambda x: float(x),'id': 'AF-LowLiqBoost'},
                     {'form_id': 'af_lowliqboostar', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-LowLiqBoostAR'},
                     {'form_id': 'af_excess', 'value': 95, 'parse': lambda x: int(x),'id': 'AF-ExcessLimit'},
+                    #IO
+                    {'form_id': 'io_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'IO-Enabled'},
+                    {'form_id': 'io_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'IO-UpdateHours'},
                     #GUI
                     {'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'parse': lambda x: str(x),'id': 'GUI-GraphLinks'},
                     {'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'parse': lambda x: str(x),'id': 'GUI-NetLinks'},

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - Inbound Offset{% endblock %}
+{% block content %}
+{% load humanize %}
+{% if channels %}
+<div class="w3-container w3-padding-small">
+  <h2>Inbound Offset</h2>
+  <div class="w3-container w3-padding-small" style="overflow-x: scroll">
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <tr>
+        <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel ID</th>
+        <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer Alias</th>
+        <th onclick="sortTable(event.target, 2, 'int')">Outbound PPM</th>
+        <th>Inbound Offset</th>
+      </tr>
+      {% for channel in channels %}
+      <tr>
+        <td title="{{ channel.funding_txid }}:{{ channel.output_index }}"><a href="/channel?={{ channel.chan_id }}" target="_blank">{{ channel.short_chan_id }}</a></td>
+        <td title="{{ channel.remote_pubkey }}">{% if channel.private == False %}<a href="{{ graph_links }}/{{ network }}node/{{ channel.remote_pubkey }}" target="_blank">{% endif %}{% if channel.alias == '' %}{{ channel.remote_pubkey|slice:":12" }}{% else %}{{ channel.alias }}{% endif %}{% if channel.private == False %}</a>{% endif %}</td>
+        <td>{{ channel.local_fee_rate|intcomma }}</td>
+        <td>
+          <form action="/inbound-offset/" method="post">
+            {% csrf_token %}
+            <input style="text-align:center" type="number" min="-100000" max="0" name="offset" value="{{ channel.inbound_offset|default:0 }}">
+            <input type="hidden" name="chan_id" value="{{ channel.chan_id }}">
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="w3-container w3-padding-small">
+  <center><h1>You dont have any channels to analyze yet!</h1></center>
+</div>
+{% endif %}
+{% if local_settings %}
+{% include 'local_settings.html' with settings=local_settings title='Inbound Offset' %}
+{% endif %}
+{% endblock %}

@@ -660,6 +660,51 @@ def auto_fees(stub):
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Data] : Error processing auto_fees: {str(e)}")
 
+def inbound_offsets(stub):
+    if LocalSettings.objects.filter(key='IO-Enabled').exists():
+        if int(LocalSettings.objects.filter(key='IO-Enabled')[0].value) == 0:
+            return
+    else:
+        LocalSettings(key='IO-Enabled', value='0').save()
+        return
+    if LocalSettings.objects.filter(key='IO-UpdateHours').exists():
+        update_hours = float(LocalSettings.objects.filter(key='IO-UpdateHours')[0].value)
+    else:
+        LocalSettings(key='IO-UpdateHours', value='24').save()
+        update_hours = 24.0
+    threshold = datetime.now() - timedelta(hours=update_hours)
+    version = stub.GetInfo(ln.GetInfoRequest()).version
+    if float(version[:4]) < 0.18:
+        return
+    channels = Channels.objects.filter(is_open=True).exclude(inbound_offset=0)
+    for ch in channels:
+        if not ch.offset_updated or ch.offset_updated < threshold:
+            balance = ch.local_fee_rate + ch.inbound_offset
+            target = -balance if balance > 0 else 0
+            channel_point = ln.ChannelPoint()
+            channel_point.funding_txid_bytes = bytes.fromhex(ch.funding_txid)
+            channel_point.funding_txid_str = ch.funding_txid
+            channel_point.output_index = ch.output_index
+            inbound_base_fee = ch.local_inbound_base_fee if ch.local_inbound_base_fee else 0
+            try:
+                stub.UpdateChannelPolicy(
+                    ln.PolicyUpdateRequest(
+                        chan_point=channel_point,
+                        base_fee_msat=ch.local_base_fee,
+                        fee_rate=(ch.local_fee_rate/1000000),
+                        time_lock_delta=ch.local_cltv,
+                        inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target)
+                    )
+                )
+            except Exception as e:
+                print(f"{datetime.now().strftime('%c')} : [Data] : Error updating inbound offset for {ch.chan_id}: {str(e)}")
+                continue
+            if ch.local_inbound_fee_rate != target:
+                InboundFeeLog(chan_id=ch.chan_id, peer_alias=ch.alias, setting='Offset Job', old_value=ch.local_inbound_fee_rate, new_value=target).save()
+            ch.local_inbound_fee_rate = target
+            ch.offset_updated = datetime.now()
+            ch.save()
+
 
 def agg_htlcs(target_htlcs, category):
     try:
@@ -714,6 +759,7 @@ def main():
             reconnect_peers(stub)
             clean_payments(stub)
             auto_fees(stub)
+            inbound_offsets(stub)
             agg_failed_htlcs()
         except Exception as e:
             print(f"{datetime.now().strftime('%c')} : [Data] : Error processing background data: {str(e)}")
