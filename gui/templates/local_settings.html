@@ -18,6 +18,7 @@
             <input class="w3-col" id="{{sett.form_id}}" name="{{sett.form_id}}" {% if sett.min %}min="{{sett.min}}" step="{{sett.min}}"{% endif %} {% if sett.max %}max="{{sett.max}}" type="number"{% endif %} value="{{sett.value}}"/>
             {% if sett.form_id == 'af_updateHours' %}<small id="af_updateMinutes"></small>{% endif %}
             {% if sett.form_id == 'io_updateHours' %}<small id="io_updateMinutes"></small>{% endif %}
+            {% if sett.form_id == 'mx_updateHours' %}<small id="mx_updateMinutes"></small>{% endif %}
           </div>
           {% endif %}
         </div>
@@ -25,7 +26,7 @@
         {% endfor %}
         <div style="height:37px" class="w3-quarter w3-container w3-row w3-margin-top">
           {% if 'update_channels' == settings.0.form_id %}
-          <label class="w3-validate" title="Also updates current (AR-Target%, AR-Outbound% , AR-Inbound%, AR-MaxCost%) channel values.">Update Channels</label>
+          <label class="w3-validate" title="Also updates current (AR-Target%, AR-Outbound% , AR-Inbound%, AR-MaxCost%, MX-Percent) channel values.">Update Channels</label>
           <input class="w3-check" id="update_channels" type="checkbox" name="update_channels"/>
           {% endif %}
           <input style="margin-top:7px" type="submit" value="OK">
@@ -55,6 +56,16 @@
       }
       ioInput.addEventListener('input', showMinutesIo);
       showMinutesIo();
+    }
+    const mxInput = document.getElementById('mx_updateHours');
+    const mxLabel = document.getElementById('mx_updateMinutes');
+    if (mxInput && mxLabel) {
+      function showMinutesMx() {
+        const val = parseFloat(mxInput.value);
+        mxLabel.textContent = isNaN(val) ? '' : `(${Math.round(val * 60)} min)`;
+      }
+      mxInput.addEventListener('input', showMinutesMx);
+      showMinutesMx();
     }
   });
 </script>

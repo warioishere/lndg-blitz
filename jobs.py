@@ -772,6 +772,58 @@ def inbound_offsets(stub):
             ch.offset_updated = datetime.now()
             ch.save()
 
+def auto_maxhtlc_job(stub):
+    if LocalSettings.objects.filter(key='MX-Enabled').exists():
+        if int(LocalSettings.objects.filter(key='MX-Enabled')[0].value) == 0:
+            return
+    else:
+        LocalSettings(key='MX-Enabled', value='0').save()
+        return
+    if LocalSettings.objects.filter(key='MX-UpdateHours').exists():
+        update_hours = float(LocalSettings.objects.filter(key='MX-UpdateHours')[0].value)
+    else:
+        LocalSettings(key='MX-UpdateHours', value='24').save()
+        update_hours = 24.0
+    if LocalSettings.objects.filter(key='MX-Percent').exists():
+        global_percent = int(LocalSettings.objects.filter(key='MX-Percent')[0].value)
+    else:
+        LocalSettings(key='MX-Percent', value='0').save()
+        global_percent = 0
+    threshold = datetime.now() - timedelta(hours=update_hours)
+    channels = Channels.objects.filter(is_open=True)
+    for ch in channels:
+        outbound = ch.local_balance + ch.pending_outbound
+        expected_msat = None
+        if ch.mx_liq_threshold and outbound < ch.mx_liq_threshold:
+            expected_msat = ch.mx_liq_value * 1000
+        else:
+            percent = ch.maxhtlc_percent if ch.maxhtlc_percent else global_percent
+            if percent:
+                expected_msat = int(outbound * (100 - percent) / 100) * 1000
+        if expected_msat is None:
+            continue
+        if (ch.local_max_htlc_msat != expected_msat) or not ch.maxhtlc_updated or ch.maxhtlc_updated < threshold:
+            channel_point = ln.ChannelPoint()
+            channel_point.funding_txid_bytes = bytes.fromhex(ch.funding_txid)
+            channel_point.funding_txid_str = ch.funding_txid
+            channel_point.output_index = ch.output_index
+            try:
+                stub.UpdateChannelPolicy(
+                    ln.PolicyUpdateRequest(
+                        chan_point=channel_point,
+                        base_fee_msat=ch.local_base_fee,
+                        fee_rate=(ch.local_fee_rate/1000000),
+                        time_lock_delta=ch.local_cltv,
+                        max_htlc_msat=expected_msat,
+                    )
+                )
+            except Exception as e:
+                print(f"{datetime.now().strftime('%c')} : [Data] : Error updating max htlc for {ch.chan_id}: {str(e)}")
+                continue
+            ch.local_max_htlc_msat = expected_msat
+            ch.maxhtlc_updated = datetime.now()
+            ch.save()
+
 
 def agg_htlcs(target_htlcs, category):
     try:
@@ -827,6 +879,7 @@ def main():
             clean_payments(stub)
             auto_fees(stub)
             inbound_offsets(stub)
+            auto_maxhtlc_job(stub)
             agg_failed_htlcs()
         except Exception as e:
             print(f"{datetime.now().strftime('%c')} : [Data] : Error processing background data: {str(e)}")

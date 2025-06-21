@@ -30,6 +30,7 @@ Welcome to LNDg, an advanced web interface designed for analyzing Lightning Netw
   - [API Backend](#api-backend)
   - [Peer Reconnection](#peer-reconnection)
   - [Peer Alias Refresh](#peer-alias-refresh)
+  - [Auto MaxHTLC](#auto-maxhtlc)
 - [Auto-Fees](#auto-fees)
   - [Auto-Fees Settings](#auto-fees-settings)
   - [Auto-Fees Notes](#auto-fees-notes)
@@ -299,6 +300,16 @@ Automatically attempts to reconnect to peers associated with inactive channels (
 ### Peer Alias Refresh
 
 Aliases for peers are periodically updated using cached node info even when the peer is disconnected.
+
+### Auto MaxHTLC
+
+Automatically adjust the `max_htlc_msat` for each channel. Define a percent offset relative to current outbound liquidity and optional override values:
+
+- **mx_liq_threshold:** When outbound liquidity falls below this sat value, the override activates.
+- **mx_liq_value:** Fixed `max_htlc_msat` (in sats) applied while below the threshold.
+- **MX-Percent:** Global percent offset when a channel has no specific percent configured.
+
+Once liquidity recovers above the threshold, the percent-based setting is applied again.
 
 ## Auto-Fees
 

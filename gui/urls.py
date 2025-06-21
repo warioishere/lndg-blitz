@@ -68,6 +68,7 @@ urlpatterns = [
     path('actions/', views.actions, name='actions'),
     path('fees/', views.fees, name='fees'),
     path('inbound-offset/', views.inbound_offset, name='inbound-offset'),
+    path('auto-maxhtlc/', views.auto_maxhtlc, name='auto-maxhtlc'),
     path('keysends/', views.keysends, name='keysends'),
     path('channels/', views.channels, name='channels'),
     path('autopilot/', views.autopilot, name='autopilot'),
