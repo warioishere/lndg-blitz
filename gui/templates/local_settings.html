@@ -17,6 +17,7 @@
           <div class="w3-col input" data-unit="{{sett.unit}}">
             <input class="w3-col" id="{{sett.form_id}}" name="{{sett.form_id}}" {% if sett.min %}min="{{sett.min}}" step="{{sett.min}}"{% endif %} {% if sett.max %}max="{{sett.max}}" type="number"{% endif %} value="{{sett.value}}"/>
             {% if sett.form_id == 'af_updateHours' %}<small id="af_updateMinutes"></small>{% endif %}
+            {% if sett.form_id == 'io_updateHours' %}<small id="io_updateMinutes"></small>{% endif %}
           </div>
           {% endif %}
         </div>
@@ -35,15 +36,25 @@
 </div>
 <script>
   document.addEventListener('DOMContentLoaded', function() {
-    const input = document.getElementById('af_updateHours');
-    const label = document.getElementById('af_updateMinutes');
-    if (input && label) {
+    const afInput = document.getElementById('af_updateHours');
+    const afLabel = document.getElementById('af_updateMinutes');
+    if (afInput && afLabel) {
       function showMinutes() {
-        const val = parseFloat(input.value);
-        label.textContent = isNaN(val) ? '' : `(${Math.round(val * 60)} min)`;
+        const val = parseFloat(afInput.value);
+        afLabel.textContent = isNaN(val) ? '' : `(${Math.round(val * 60)} min)`;
       }
-      input.addEventListener('input', showMinutes);
+      afInput.addEventListener('input', showMinutes);
       showMinutes();
+    }
+    const ioInput = document.getElementById('io_updateHours');
+    const ioLabel = document.getElementById('io_updateMinutes');
+    if (ioInput && ioLabel) {
+      function showMinutesIo() {
+        const val = parseFloat(ioInput.value);
+        ioLabel.textContent = isNaN(val) ? '' : `(${Math.round(val * 60)} min)`;
+      }
+      ioInput.addEventListener('input', showMinutesIo);
+      showMinutesIo();
     }
   });
 </script>

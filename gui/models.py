@@ -105,6 +105,8 @@ class Channels(models.Model):
     local_fee_rate = models.IntegerField()
     local_inbound_base_fee = models.IntegerField()
     local_inbound_fee_rate = models.IntegerField()
+    inbound_offset = models.IntegerField(default=0)
+    offset_updated = models.DateTimeField(null=True, default=None)
     local_disabled = models.BooleanField()
     local_cltv = models.IntegerField()
     local_min_htlc_msat = models.BigIntegerField()
