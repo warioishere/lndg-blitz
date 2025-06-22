@@ -2364,6 +2364,8 @@ def get_local_settings(*prefixes):
         form.append({'unit': '%', 'form_id': 'af_lowliq', 'value': 15, 'label': 'AF LowLiq', 'id': 'AF-LowLiqLimit', 'title': 'Limit for running low liq AF rules (increase when failed htlcs + no inbound). Default 15', 'min':0, 'max':100})
         form.append({'unit': 'x', 'form_id': 'af_lowliqboost', 'value': 1, 'label': 'AF LowLiq Boost', 'id': 'AF-LowLiqBoost', 'title': 'Multiplier for extra fee bump when liquidity is below AF-LowLiqLimit. Default 1', 'min':0, 'max':10})
         form.append({'unit': '', 'form_id': 'af_lowliqboostar', 'value': 0, 'label': 'AF Boost AR Only', 'id': 'AF-LowLiqBoostAR', 'title': 'Apply boost only to channels with Auto-Rebalance enabled; Off disables the boost', 'min':0, 'max':1})
+        form.append({'unit': 'ppm', 'form_id': 'af_peer_rate_limit', 'value': 0, 'label': 'Peer oRate Limit', 'id': 'AF-PeerRateLimit', 'title': 'Only raise fees if peer oRate below this limit; 0 disables', 'min':0, 'max':5000})
+        form.append({'unit': '', 'form_id': 'af_peer_rate_check', 'value': 0, 'label': 'Peer Rate Check', 'id': 'AF-PeerRateCheck', 'title': 'Enable/Disable peer oRate limit check', 'min':0, 'max':1})
         form.append({'unit': '%', 'form_id': 'af_excess', 'value': 95, 'label': 'AF Excess', 'id': 'AF-ExcessLimit', 'title': 'Limit for running excess liq AF rules (decrease for stagnant channels and those with assisting revenues). Default 95', 'min':0, 'max':100})
     if 'IO-' in prefixes:
         form.append({'unit': '', 'form_id': 'io_enabled', 'value': 0, 'label': 'Offset Updates', 'id': 'IO-Enabled', 'title': 'Enable/Disable automatic inbound offset updates', 'min':0, 'max':1})
@@ -2418,6 +2420,8 @@ def update_settings(request):
                     {'form_id': 'af_lowliq', 'value': 15, 'parse': lambda x: int(x),'id': 'AF-LowLiqLimit'},
                     {'form_id': 'af_lowliqboost', 'value': 1, 'parse': lambda x: float(x),'id': 'AF-LowLiqBoost'},
                     {'form_id': 'af_lowliqboostar', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-LowLiqBoostAR'},
+                    {'form_id': 'af_peer_rate_limit', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-PeerRateLimit'},
+                    {'form_id': 'af_peer_rate_check', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-PeerRateCheck'},
                     {'form_id': 'af_excess', 'value': 95, 'parse': lambda x: int(x),'id': 'AF-ExcessLimit'},
                     #IO
                     {'form_id': 'io_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'IO-Enabled'},

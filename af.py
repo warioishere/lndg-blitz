@@ -64,6 +64,16 @@ def main(channels):
     else:
         LocalSettings(key='AF-LowLiqBoostAR', value='0').save()
         boost_ar_only = False
+    if LocalSettings.objects.filter(key='AF-PeerRateCheck').exists():
+        peer_rate_check = LocalSettings.objects.filter(key='AF-PeerRateCheck').get().value == '1'
+    else:
+        LocalSettings(key='AF-PeerRateCheck', value='0').save()
+        peer_rate_check = False
+    if LocalSettings.objects.filter(key='AF-PeerRateLimit').exists():
+        peer_rate_limit = int(LocalSettings.objects.filter(key='AF-PeerRateLimit').get().value)
+    else:
+        LocalSettings(key='AF-PeerRateLimit', value='0').save()
+        peer_rate_limit = 0
     if lowliq_limit >= excess_limit:
         print('Invalid thresholds detected, using defaults...')
         lowliq_limit = 5
@@ -241,6 +251,8 @@ def main(channels):
     # Define outbound adjustment calculation function (per channel)
     def compute_outbound_adjustment(row):
         if row['out_percent'] <= lowliq_limit:
+            if peer_rate_check and peer_rate_limit > 0 and row['remote_fee_rate'] >= peer_rate_limit:
+                return 0
             boost = 0
             if boost_ar_only and row.get('auto_rebalance'):
                 deficit = max(0, lowliq_limit - row['out_percent'])

@@ -328,12 +328,14 @@ Customize Auto-Fees (AF) behavior via the settings page:
 - `AF-LowLiqLimit`: Outbound liquidity (%) threshold below which the "Low Liquidity" fee algorithm applies.
 - `AF-LowLiqBoost`: Scaling factor applied when liquidity is below `AF-LowLiqLimit` (default: 1).
 - `AF-LowLiqBoostAR`: When `1`, apply the low-liquidity boost only to channels with Auto-Rebalance enabled; `0` disables the boost entirely.
+- `AF-PeerRateLimit`: Maximum peer oRate (ppm) for applying low-liquidity fee increases. `0` disables this check.
+- `AF-PeerRateCheck`: Enable (`1`) or disable (`0`) the peer oRate limit evaluation.
 - `AF-ExcessLimit`: Outbound liquidity (%) threshold above which the "Excess Liquidity" fee algorithm applies.
 
 ### Auto-Fees Notes
 
 1.  AF adjustments occur only if `AF-UpdateHours` have passed since the last LNDg fee update for that channel (fractions are supported).
-2.  Channels below `AF-LowLiqLimit`% outbound liquidity may see fee increases based on failed HTLCs and incoming flow.
+2.  Channels below `AF-LowLiqLimit`% outbound liquidity may see fee increases based on failed HTLCs and incoming flow. When `AF-PeerRateCheck` is enabled, increases only occur if the peer's oRate is below `AF-PeerRateLimit`.
 3.  Channels above `AF-ExcessLimit`% outbound liquidity may see fee decreases based on lack of flow or assisted revenue.
 4.  Channels between these limits adjust based on overall flow patterns.
 5.  View AF change history in the "Autofees" tab.
