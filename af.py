@@ -54,7 +54,11 @@ def main(channels):
         LocalSettings(key='AF-ExcessLimit', value='95').save()
         excess_limit = 95
     if LocalSettings.objects.filter(key='AF-RemoteFeeLimit').exists():
-        remote_limit = int(LocalSettings.objects.filter(key='AF-RemoteFeeLimit').get().value)
+        try:
+            remote_limit = int(float(LocalSettings.objects.filter(key='AF-RemoteFeeLimit').get().value))
+        except (ValueError, TypeError):
+            remote_limit = 1000
+            LocalSettings.objects.filter(key='AF-RemoteFeeLimit').update(value='1000')
     else:
         LocalSettings(key='AF-RemoteFeeLimit', value='1000').save()
         remote_limit = 1000

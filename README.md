@@ -311,7 +311,7 @@ Customize Auto-Fees (AF) behavior via the settings page:
 - `AF-UpdateHours`: Minimum hours between AF adjustments for a single channel (default: 24).
 - `AF-LowLiqLimit`: Outbound liquidity (%) threshold below which the "Low Liquidity" fee algorithm applies.
 - `AF-ExcessLimit`: Outbound liquidity (%) threshold above which the "Excess Liquidity" fee algorithm applies.
-- `AF-RemoteFeeLimit`: Maximum peer oRate for LowLiq fee increases.
+- `AF-RemoteFeeLimit`: Maximum peer oRate for LowLiq fee increases (default: 1000).
 
 ### Auto-Fees Notes
 

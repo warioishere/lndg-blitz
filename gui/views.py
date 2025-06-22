@@ -2069,7 +2069,7 @@ def update_settings(request):
                     {'form_id': 'af_updateHours', 'value': 24, 'parse': lambda x: int(x),'id': 'AF-UpdateHours'},
                     {'form_id': 'af_lowliq', 'value': 15, 'parse': lambda x: int(x),'id': 'AF-LowLiqLimit'},
                     {'form_id': 'af_excess', 'value': 95, 'parse': lambda x: int(x),'id': 'AF-ExcessLimit'},
-                    {'form_id': 'af_remote_fee_limit', 'value': 1000, 'parse': lambda x: int(x),'id': 'AF-RemoteFeeLimit'},
+                    {'form_id': 'af_remote_fee_limit', 'value': 1000, 'parse': lambda x: int(float(x)), 'id': 'AF-RemoteFeeLimit'},
                     #GUI
                     {'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'parse': lambda x: str(x),'id': 'GUI-GraphLinks'},
                     {'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'parse': lambda x: str(x),'id': 'GUI-NetLinks'},
