@@ -53,6 +53,11 @@ def main(channels):
     else:
         LocalSettings(key='AF-ExcessLimit', value='95').save()
         excess_limit = 95
+    if LocalSettings.objects.filter(key='AF-RemoteFeeLimit').exists():
+        remote_limit = int(LocalSettings.objects.filter(key='AF-RemoteFeeLimit').get().value)
+    else:
+        LocalSettings(key='AF-RemoteFeeLimit', value='1000').save()
+        remote_limit = 1000
     if lowliq_limit >= excess_limit:
         print('Invalid thresholds detected, using defaults...')
         lowliq_limit = 5
@@ -219,6 +224,12 @@ def main(channels):
     channels_df['new_rate'] = channels_df['local_fee_rate'] + channels_df['adjustment']
     channels_df['new_rate'] = (channels_df['new_rate'] / increment).round(0) * increment
     channels_df['new_rate'] = channels_df['new_rate'].clip(min_rate, max_rate)
+    condition = (
+        (channels_df['adjustment'] > 0) &
+        (channels_df['overall_out_percent'] <= lowliq_limit) &
+        (channels_df['remote_fee_rate'] >= remote_limit)
+    )
+    channels_df.loc[condition, 'new_rate'] = channels_df.loc[condition, 'local_fee_rate']
     channels_df['adjustment'] = channels_df['new_rate'] - channels_df['local_fee_rate']
 
     # Compute new inbound rates
