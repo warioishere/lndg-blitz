@@ -64,6 +64,8 @@ class AutoFeesForm(AutoRebalanceForm):
     af_lowliq = forms.IntegerField(label='af_lowliq', required=False)
     af_lowliqboost = forms.FloatField(label='af_lowliqboost', required=False)
     af_lowliqboostar = forms.IntegerField(label='af_lowliqboostar', required=False)
+    af_peer_rate_limit = forms.IntegerField(label='af_peer_rate_limit', required=False)
+    af_peer_rate_check = forms.IntegerField(label='af_peer_rate_check', required=False)
     af_excess = forms.IntegerField(label='af_excess', required=False)
 
 class GUIForm(AutoFeesForm):
