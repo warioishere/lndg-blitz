@@ -222,7 +222,8 @@ class Rebalancer(models.Model):
 
 class LocalSettings(models.Model):
     key = models.CharField(primary_key=True, default=None, max_length=20)
-    value = models.CharField(default=None, max_length=50)
+    # allow arbitrarily long values for settings like the Amboss API key
+    value = models.TextField(default=None)
     class Meta:
         app_label = 'gui'
 
@@ -422,6 +423,16 @@ class RebalanceRoute(models.Model):
 class NodeCache(models.Model):
     pubkey = models.CharField(max_length=66, primary_key=True)
     data = models.JSONField()
+    updated_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        app_label = 'gui'
+
+
+class AmbossPeerFees(models.Model):
+    pubkey = models.CharField(max_length=66, primary_key=True)
+    mean_today = models.FloatField(null=True, default=None)
+    median_today = models.FloatField(null=True, default=None)
     updated_at = models.DateTimeField(default=timezone.now)
 
     class Meta:

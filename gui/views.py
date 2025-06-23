@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, render, redirect
+from django.http import JsonResponse
 from django.db.models import Sum, IntegerField, Count, Max, F, Q, Case, When, Value, FloatField, ExpressionWrapper, DateTimeField, DurationField, OuterRef, Subquery, Prefetch
 from django.db.models.functions import Round, TruncDay, Coalesce
 from django.contrib.auth.decorators import login_required
@@ -12,7 +13,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
-from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, calc_success_ratio
+from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, calc_success_ratio
 from gui.node_cache import get_node_info_cached, cache_stats
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
@@ -27,6 +28,11 @@ from lndg import settings
 from os import path
 from pandas import DataFrame, merge
 from requests import get
+import time
+import logging
+from amboss import fetch_amboss_data, AmbossAPIError
+
+logger = logging.getLogger(__name__)
 from secrets import token_bytes
 from trade import create_trade_details
 import af
@@ -453,6 +459,109 @@ def peers(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def amboss_fees(request):
+    if request.method == 'GET':
+        # Retrieve unique pubkeys for all open channels, including inactive ones
+        channels = list(
+            Channels.objects.filter(is_open=True)
+            .values('remote_pubkey', 'alias')
+            .order_by('remote_pubkey')
+            .distinct('remote_pubkey')
+        )
+        # sort peers alphabetically by alias for consistent display
+        channels.sort(key=lambda c: (c.get('alias') or '').lower())
+        key_setting = LocalSettings.objects.filter(key='AMB-ApiKey').first()
+        enabled_setting = LocalSettings.objects.filter(key='AMB-Enabled').first()
+        update_setting = LocalSettings.objects.filter(key='AMB-UpdateHours').first()
+        selected_setting = LocalSettings.objects.filter(key='AMB-SelectedPeers').first()
+        api_key = key_setting.value if key_setting else ''
+        auto_enabled = int(enabled_setting.value) if enabled_setting else 0
+        update_hours = float(update_setting.value) if update_setting and update_setting.value else 0
+        logger.info(
+            f"amboss_fees page requested - peers:{len(channels)} api_key_present:{bool(api_key)}"
+        )
+        time_range = "TODAY"
+        results = []
+        stored_selected = []
+        if selected_setting and selected_setting.value:
+            stored_selected = [s for s in selected_setting.value.split(',') if s]
+        selected_pubkeys = request.GET.getlist('pubkey') or stored_selected
+        fetch_now = request.GET.get('fetch')
+        if fetch_now and api_key and selected_pubkeys:
+            for ch in channels:
+                pubkey = ch['remote_pubkey']
+                row = {
+                    'pubkey': pubkey,
+                    'alias': ch['alias'],
+                }
+                if pubkey in selected_pubkeys:
+                    logger.debug(f"Fetching amboss data for peer {pubkey}")
+                    try:
+                        fee_data = fetch_amboss_data(pubkey, api_key, time_range)
+                    except AmbossAPIError as e:
+                        fee_data = {}
+                        logger.error(f"Amboss error for {pubkey}: {e}")
+                    row['mean'] = fee_data.get('mean')
+                    row['median'] = fee_data.get('median')
+                    AmbossPeerFees.objects.update_or_create(
+                        pubkey=pubkey,
+                        defaults={
+                            'mean_today': row['mean'],
+                            'median_today': row['median'],
+                            'updated_at': timezone.now(),
+                        },
+                    )
+                    time.sleep(0.05)
+                else:
+                    row['mean'] = None
+                    row['median'] = None
+                results.append(row)
+            if selected_setting:
+                selected_setting.value = ','.join(selected_pubkeys)
+                selected_setting.save()
+            else:
+                LocalSettings.objects.create(key='AMB-SelectedPeers', value=','.join(selected_pubkeys))
+        elif fetch_now and api_key:
+            logger.info("Amboss fetch requested with no peer selections")
+            for ch in channels:
+                stored = AmbossPeerFees.objects.filter(pubkey=ch['remote_pubkey']).first()
+                row = {
+                    'pubkey': ch['remote_pubkey'],
+                    'alias': ch['alias'],
+                    'mean': stored.mean_today if stored else None,
+                    'median': stored.median_today if stored else None,
+                }
+                results.append(row)
+        elif not api_key:
+            logger.warning("Amboss API key not configured")
+        else:
+            # no fetch requested - just list peers
+            for ch in channels:
+                stored = AmbossPeerFees.objects.filter(pubkey=ch['remote_pubkey']).first()
+                row = {
+                    'pubkey': ch['remote_pubkey'],
+                    'alias': ch['alias'],
+                    'mean': stored.mean_today if stored else None,
+                    'median': stored.median_today if stored else None,
+                }
+                results.append(row)
+        context = {
+            'results': results,
+            'amb_time_range': time_range,
+            'local_settings': get_local_settings('AMB-'),
+            'amb_update_hours': update_hours,
+            'amb_enabled': auto_enabled,
+            'selected_pubkeys': selected_pubkeys,
+            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
+            'graph_links': graph_links()
+        }
+        if request.GET.get('ajax'):
+            return JsonResponse(context)
+        return render(request, 'amboss_fees.html', context)
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def balances(request):
     if request.method == 'GET':
         stub = walletstub.WalletKitStub(lnd_connect())
@@ -613,7 +722,7 @@ def add_tower_form(request):
                 messages.error(request, 'Add tower request failed! Error: ' + error_msg)
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def delete_tower_form(request):
@@ -634,7 +743,7 @@ def delete_tower_form(request):
                 messages.error(request, 'Delete tower request failed! Error: ' + error_msg)
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def remove_tower_form(request):
@@ -654,7 +763,7 @@ def remove_tower_form(request):
                 messages.error(request, 'Remove tower request failed! Error: ' + error_msg)
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def resolutions(request):
@@ -2382,12 +2491,19 @@ def get_local_settings(*prefixes):
     if 'GUI-' in prefixes:
         form.append({'unit': '', 'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'label': 'Graph URL', 'id': 'GUI-GraphLinks', 'title': 'Preferred Graph URL. Default https://mempool.space/lightning'})
         form.append({'unit': '', 'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'label': 'NET URL', 'id': 'GUI-NetLinks', 'title': 'Preferred NET URL. Default https://mempool.space'})
+    if 'AMB-' in prefixes:
+        form.append({'unit': '', 'form_id': 'amboss_api_key', 'value': '', 'label': 'Amboss API Key', 'id': 'AMB-ApiKey', 'title': 'Amboss API Key for fee data'})
+        form.append({'unit': '', 'form_id': 'amb_enabled', 'value': 0, 'label': 'Auto Fetch', 'id': 'AMB-Enabled', 'title': 'Enable/Disable automatic Amboss fetches', 'min':0, 'max':1})
+        form.append({'unit': 'hours', 'form_id': 'amb_updateHours', 'value': 0, 'label': 'Update', 'id': 'AMB-UpdateHours', 'title': 'Hours between Amboss fetches. Fractions allowed', 'min':0, 'max':100})
     if 'LND-' in prefixes:
         form.append({'unit': '', 'form_id': 'lnd_cleanPayments', 'value': 0, 'label': 'LND Clean Payments', 'id': 'LND-CleanPayments', 'title': 'Clean LND Payments (toggles failed payment clean-up routine)', 'min':0, 'max':1})
         form.append({'unit': 'days', 'form_id': 'lnd_retentionDays', 'value': 30, 'label': 'LND Retention', 'id': 'LND-RetentionDays', 'title': 'LND Retention days for failed payment data', 'min':1, 'max':1000})
 
     for prefix in prefixes:
-        ar_settings = LocalSettings.objects.filter(key__contains=prefix).values('key', 'value').order_by('key')
+        query = LocalSettings.objects.filter(key__contains=prefix)
+        if prefix == 'AMB-':
+            query = query.exclude(key='AMB-SelectedPeers')
+        ar_settings = query.values('key', 'value').order_by('key')
         for field in form:
             for sett in ar_settings:
                 if field['id'] == sett['key']:
@@ -2435,6 +2551,10 @@ def update_settings(request):
                     #GUI
                     {'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'parse': lambda x: str(x),'id': 'GUI-GraphLinks'},
                     {'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'parse': lambda x: str(x),'id': 'GUI-NetLinks'},
+                    #AMBOSS
+                    {'form_id': 'amboss_api_key', 'value': '', 'parse': lambda x: str(x),'id': 'AMB-ApiKey'},
+                    {'form_id': 'amb_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'AMB-Enabled'},
+                    {'form_id': 'amb_updateHours', 'value': 0, 'parse': lambda x: float(x),'id': 'AMB-UpdateHours'},
                     #LND
                     {'form_id': 'lnd_cleanPayments', 'value': 0, 'parse': lambda x: int(x), 'id': 'LND-CleanPayments'},
                     {'form_id': 'lnd_retentionDays', 'value': 30, 'parse': lambda x: int(x), 'id': 'LND-RetentionDays'},
@@ -2451,7 +2571,11 @@ def update_settings(request):
             for field in template:
                 value = form.cleaned_data[field['form_id']]
                 if value is not None:
-                    value = field['parse'](value)
+                    try:
+                        value = field['parse'](value)
+                    except Exception:
+                        messages.error(request, f"Invalid value for {field['id']}")
+                        continue
                     try:
                         db_value = LocalSettings.objects.get(key=field['id'])
                     except:
@@ -2477,7 +2601,7 @@ def update_settings(request):
                     else:
                         messages.success(request, field['id'] + ' updated to: ' + str(value))
 
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def update_channel(request):

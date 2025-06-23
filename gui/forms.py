@@ -82,6 +82,9 @@ class LocalSettingsForm(GUIForm):
     mx_percent = forms.IntegerField(label='mx_percent', required=False)
     node_cache_expiry_minutes = forms.IntegerField(label='node_cache_expiry_minutes', required=False)
     node_cache_max_entries = forms.IntegerField(label='node_cache_max_entries', required=False)
+    amboss_api_key = forms.CharField(label='amboss_api_key', required=False)
+    amb_enabled = forms.IntegerField(label='amb_enabled', required=False)
+    amb_updateHours = forms.FloatField(label='amb_updateHours', required=False)
 
 updates_channel_codes = [
     (0, 'base_fee'),
