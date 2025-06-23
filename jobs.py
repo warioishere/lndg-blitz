@@ -16,6 +16,7 @@ django.setup()
 from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, Closures, Resolutions, PendingHTLCs, LocalSettings, FailedHTLCs, Autofees, InboundFeeLog, PendingChannels, HistFailedHTLC, PeerEvents
 from gui.node_cache import get_node_info_cached
 import af
+from jobs_emergency import emergency_forward_check
 
 CHANNEL_UPDATE_FIELDS = [
     'remote_pubkey', 'short_chan_id', 'funding_txid', 'output_index', 'capacity',
@@ -248,6 +249,7 @@ def update_forwards(stub):
             inbound_fee=round(in_fee_msat / 1000, 3)
         ))
     Forwards.objects.bulk_create(new_forwards)
+    emergency_forward_check(stub, [f.chan_id_out for f in forwards])
 
 def disconnectpeer(stub, peer):
     try:
@@ -834,6 +836,43 @@ def auto_maxhtlc_job(stub):
             ch.maxhtlc_updated = datetime.now()
             ch.save()
 
+def emergency_fee_job(stub):
+    if LocalSettings.objects.filter(key='EP-Enabled').exists():
+        if int(LocalSettings.objects.filter(key='EP-Enabled')[0].value) == 0:
+            return
+    else:
+        LocalSettings(key='EP-Enabled', value='0').save()
+        return
+    default_target = int(LocalSettings.objects.filter(key='EP-DefaultTarget').first().value)
+    default_inc = float(LocalSettings.objects.filter(key='EP-IncreasePct').first().value)
+    default_cooldown = int(LocalSettings.objects.filter(key='EP-Cooldown').first().value)
+    channels = Channels.objects.filter(is_open=True, ep_enabled=True)
+    for ch in channels:
+        target = ch.ep_target if ch.ep_target is not None else default_target
+        inc_pct = ch.ep_inc_pct if ch.ep_inc_pct is not None else default_inc
+        cooldown = ch.ep_cooldown if ch.ep_cooldown is not None else default_cooldown
+        percent = (ch.local_balance + ch.pending_outbound) * 100 / ch.capacity if ch.capacity else 0
+        if percent < target:
+            if not ch.ep_updated or (datetime.now() - ch.ep_updated).total_seconds() >= cooldown * 60:
+                new_rate = int(ch.local_fee_rate * (1 + inc_pct/100))
+                channel_point = ln.ChannelPoint()
+                channel_point.funding_txid_bytes = bytes.fromhex(ch.funding_txid)
+                channel_point.funding_txid_str = ch.funding_txid
+                channel_point.output_index = ch.output_index
+                try:
+                    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(
+                        chan_point=channel_point,
+                        base_fee_msat=ch.local_base_fee,
+                        fee_rate=(new_rate/1000000),
+                        time_lock_delta=ch.local_cltv))
+                    Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting='EP', old_value=ch.local_fee_rate, new_value=new_rate).save()
+                    ch.local_fee_rate = new_rate
+                    ch.fees_updated = datetime.now()
+                    ch.ep_updated = datetime.now()
+                    ch.save()
+                except Exception as e:
+                    print(f"{datetime.now().strftime('%c')} : [Data] : Error updating emergency fee for {ch.chan_id}: {str(e)}")
+
 
 def agg_htlcs(target_htlcs, category):
     try:
@@ -880,6 +919,7 @@ def main():
             update_peers(stub)
             refresh_peer_aliases(stub)
             update_channels(stub)
+            emergency_fee_job(stub)
             update_invoices(stub)
             update_payments(stub)
             update_forwards(stub)

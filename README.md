@@ -341,6 +341,17 @@ Customize Auto-Fees (AF) behavior via the settings page:
 4.  Channels between these limits adjust based on overall flow patterns.
 5.  View AF change history in the "Autofees" tab.
 
+## Emergency Fee Increases
+
+Automatically raise outbound fee rates when channel liquidity drops. Configure defaults in the `Emergency Fees` tab and override them per channel.
+
+- `EP-Enabled`: Default on/off state for each channel.
+- `EP-DefaultTarget`: Outbound liquidity percentage below which fees increase.
+- `EP-IncreasePct`: Percentage increase applied when triggered.
+- `EP-Cooldown`: Minimum minutes between increases for a channel.
+- `EP-LiveThreshold`: Threshold for immediate increases after forwards.
+- `EP-LiveIncreasePct`: Percentage increase for the live trigger.
+
 ## Auto-Rebalancer
 
 Automatically manage channel liquidity to maintain outbound capacity on profitable routes. See the [Quick Start Guide](https://github.com/cryptosharks131/lndg/blob/master/quickstart.md).

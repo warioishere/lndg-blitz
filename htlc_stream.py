@@ -2,12 +2,15 @@ import django
 from datetime import datetime
 from gui.lnd_deps import router_pb2 as lnr
 from gui.lnd_deps import router_pb2_grpc as lnrouter
+from gui.lnd_deps import lightning_pb2 as ln
+from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps.lnd_connect import lnd_connect
 from os import environ
 from time import sleep
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
 from gui.models import Channels, FailedHTLCs
+from jobs_emergency import emergency_forward_check
 
 def main():
     while True:
@@ -15,6 +18,7 @@ def main():
             print(f"{datetime.now().strftime('%c')} : [HTLC] : Starting failed HTLC stream...")
             connection = lnd_connect()
             routerstub = lnrouter.RouterStub(connection)
+            lightning_stub = lnrpc.LightningStub(connection)
             all_forwards = {}
             for response in routerstub.SubscribeHtlcEvents(lnr.SubscribeHtlcEventsRequest()):
                 if response.event_type == 3 and str(response.link_fail_event) != '':
@@ -39,7 +43,8 @@ def main():
                     # Delete forward_event
                     key = str(response.incoming_channel_id) + str(response.outgoing_channel_id) + str(response.incoming_htlc_id) + str(response.outgoing_htlc_id)
                     if key in all_forwards.keys():
-                            del all_forwards[key]
+                        del all_forwards[key]
+                        emergency_forward_check(lightning_stub, response.outgoing_channel_id)
                 elif response.event_type == 3 and str(response.forward_fail_event) == '':
                     key = str(response.incoming_channel_id) + str(response.outgoing_channel_id) + str(response.incoming_htlc_id) + str(response.outgoing_htlc_id)
                     if key in all_forwards.keys():

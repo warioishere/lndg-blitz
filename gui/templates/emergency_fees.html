@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - Emergency Fees{% endblock %}
+{% block content %}
+{% load humanize %}
+<div class="w3-container w3-padding-small">
+  <h2>Emergency Fee Settings</h2>
+  <div class="w3-container w3-padding-small" style="overflow:auto;max-height:800px">
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <tr>
+        <th>Peer</th>
+        <th>Chan ID</th>
+        <th>Outbound %</th>
+        <th>Enabled</th>
+        <th>Target %</th>
+        <th>Increase %</th>
+        <th>Cooldown</th>
+        <th>Live Threshold</th>
+        <th>Live Increase %</th>
+      </tr>
+      {% for ch in channels %}
+      <tr>
+        <td>{{ ch.alias }}</td>
+        <td><a href="/channel?={{ ch.chan_id }}" target="_blank">{{ ch.chan_id }}</a></td>
+        <td>{{ ch.outbound_percent|floatformat:1 }}</td>
+        <td>
+          <form action="/update_channel/" method="post">
+            {% csrf_token %}
+            <input type="submit" value="{% if ch.ep_enabled %}Disable{% else %}Enable{% endif %}">
+            <input type="hidden" name="chan_id" value="{{ ch.chan_id }}">
+            <input type="hidden" name="update_target" value="16">
+            <input type="hidden" name="target" value="0">
+          </form>
+        </td>
+        <td>
+          <form action="/update_channel/" method="post">
+            {% csrf_token %}
+            <input type="number" style="width:60px;text-align:center" min="0" max="100" name="target" value="{{ ch.ep_target }}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="chan_id" value="{{ ch.chan_id }}">
+            <input type="hidden" name="update_target" value="17">
+          </form>
+        </td>
+        <td>
+          <form action="/update_channel/" method="post">
+            {% csrf_token %}
+            <input type="number" style="width:60px;text-align:center" step="0.1" name="target" value="{{ ch.ep_inc_pct }}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="chan_id" value="{{ ch.chan_id }}">
+            <input type="hidden" name="update_target" value="18">
+          </form>
+        </td>
+        <td>
+          <form action="/update_channel/" method="post">
+            {% csrf_token %}
+            <input type="number" style="width:60px;text-align:center" min="1" name="target" value="{{ ch.ep_cooldown }}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="chan_id" value="{{ ch.chan_id }}">
+            <input type="hidden" name="update_target" value="19">
+          </form>
+        </td>
+        <td>
+          <form action="/update_channel/" method="post">
+            {% csrf_token %}
+            <input type="number" style="width:60px;text-align:center" min="0" max="100" name="target" value="{{ ch.ep_live_threshold }}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="chan_id" value="{{ ch.chan_id }}">
+            <input type="hidden" name="update_target" value="20">
+          </form>
+        </td>
+        <td>
+          <form action="/update_channel/" method="post">
+            {% csrf_token %}
+            <input type="number" style="width:60px;text-align:center" step="0.1" name="target" value="{{ ch.ep_live_inc_pct }}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+            <input type="hidden" name="chan_id" value="{{ ch.chan_id }}">
+            <input type="hidden" name="update_target" value="21">
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% if local_settings %}
+{% include 'local_settings.html' with settings=local_settings title='Emergency Fees' %}
+{% endif %}
+{% endblock %}
