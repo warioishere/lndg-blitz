@@ -85,6 +85,13 @@ class LocalSettingsForm(GUIForm):
     amboss_api_key = forms.CharField(label='amboss_api_key', required=False)
     amb_enabled = forms.IntegerField(label='amb_enabled', required=False)
     amb_updateHours = forms.FloatField(label='amb_updateHours', required=False)
+    ep_enabled = forms.IntegerField(label='ep_enabled', required=False)
+    ep_target_default = forms.IntegerField(label='ep_target_default', required=False)
+    ep_inc_pct = forms.FloatField(label='ep_inc_pct', required=False)
+    ep_cooldown = forms.IntegerField(label='ep_cooldown', required=False)
+    ep_live_threshold = forms.IntegerField(label='ep_live_threshold', required=False)
+    ep_live_inc_pct = forms.FloatField(label='ep_live_inc_pct', required=False)
+    ep_live_peers = forms.CharField(label='ep_live_peers', required=False)
 
 updates_channel_codes = [
     (0, 'base_fee'),
@@ -103,12 +110,18 @@ updates_channel_codes = [
     (13, 'inbound_fee_rate'),
     (14, 'ar_source'),
     (15, 'ar_source_ppm_diff'),
+    (16, 'ep_enabled'),
+    (17, 'ep_target'),
+    (18, 'ep_inc_pct'),
+    (19, 'ep_cooldown'),
+    (20, 'ep_live_threshold'),
+    (21, 'ep_live_inc_pct'),
 ]
 
 class UpdateChannel(forms.Form):
     chan_id = forms.IntegerField(label='chan_id')
-    target = forms.IntegerField(label='target')
-    update_target = forms.ChoiceField(label='update_target', choices=updates_channel_codes)
+    target = forms.FloatField(label='target')
+
 
 class UpdateClosing(forms.Form):
     funding_txid = forms.CharField(label='funding_txid', max_length=64)

@@ -136,6 +136,13 @@ class Channels(models.Model):
     ar_max_cost = models.IntegerField()
     ar_source = models.BooleanField(default=False)
     ar_source_ppm_diff = models.IntegerField(default=0)
+    ep_enabled = models.BooleanField(default=False)
+    ep_target = models.IntegerField(default=50)
+    ep_inc_pct = models.FloatField(default=10)
+    ep_cooldown = models.IntegerField(default=10)
+    ep_live_threshold = models.IntegerField(default=40)
+    ep_live_inc_pct = models.FloatField(default=5)
+    ep_updated = models.DateTimeField(default=timezone.now)
     fees_updated = models.DateTimeField(default=timezone.now)
     auto_fees = models.BooleanField()
     notes = models.TextField(default='', blank=True)
@@ -176,6 +183,48 @@ class Channels(models.Model):
                 LocalSettings(key='AR-MaxCost%', value='65').save()
                 cost_setting = 65
             self.ar_max_cost = cost_setting
+        if not self.ep_target:
+            if LocalSettings.objects.filter(key='EP-DefaultTarget').exists():
+                ep_setting = int(LocalSettings.objects.filter(key='EP-DefaultTarget')[0].value)
+            else:
+                LocalSettings(key='EP-DefaultTarget', value='50').save()
+                ep_setting = 50
+            self.ep_target = ep_setting
+        if self.ep_enabled is None:
+            if LocalSettings.objects.filter(key='EP-Enabled').exists():
+                enabled = int(LocalSettings.objects.filter(key='EP-Enabled')[0].value)
+            else:
+                LocalSettings(key='EP-Enabled', value='0').save()
+                enabled = 0
+            self.ep_enabled = False if enabled == 0 else True
+        if not self.ep_inc_pct:
+            if LocalSettings.objects.filter(key='EP-IncreasePct').exists():
+                inc_pct = float(LocalSettings.objects.filter(key='EP-IncreasePct')[0].value)
+            else:
+                LocalSettings(key='EP-IncreasePct', value='10').save()
+                inc_pct = 10
+            self.ep_inc_pct = inc_pct
+        if not self.ep_cooldown:
+            if LocalSettings.objects.filter(key='EP-Cooldown').exists():
+                cooldown = int(LocalSettings.objects.filter(key='EP-Cooldown')[0].value)
+            else:
+                LocalSettings(key='EP-Cooldown', value='10').save()
+                cooldown = 10
+            self.ep_cooldown = cooldown
+        if not self.ep_live_threshold:
+            if LocalSettings.objects.filter(key='EP-LiveThreshold').exists():
+                threshold = int(LocalSettings.objects.filter(key='EP-LiveThreshold')[0].value)
+            else:
+                LocalSettings(key='EP-LiveThreshold', value='40').save()
+                threshold = 40
+            self.ep_live_threshold = threshold
+        if not self.ep_live_inc_pct:
+            if LocalSettings.objects.filter(key='EP-LiveIncreasePct').exists():
+                live_inc = float(LocalSettings.objects.filter(key='EP-LiveIncreasePct')[0].value)
+            else:
+                LocalSettings(key='EP-LiveIncreasePct', value='5').save()
+                live_inc = 5
+            self.ep_live_inc_pct = live_inc
         super(Channels, self).save(*args, **kwargs)
 
     class Meta:

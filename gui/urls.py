@@ -70,6 +70,7 @@ urlpatterns = [
     path('amboss-fees/', views.amboss_fees, name='amboss-fees'),
     path('inbound-offset/', views.inbound_offset, name='inbound-offset'),
     path('auto-maxhtlc/', views.auto_maxhtlc, name='auto-maxhtlc'),
+    path('emergency-fees/', views.emergency_fees, name='emergency-fees'),
     path('keysends/', views.keysends, name='keysends'),
     path('channels/', views.channels, name='channels'),
     path('autopilot/', views.autopilot, name='autopilot'),

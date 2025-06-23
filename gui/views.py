@@ -2273,6 +2273,21 @@ def auto_maxhtlc(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def emergency_fees(request):
+    if request.method == 'GET':
+        channels = Channels.objects.filter(is_open=True).annotate(outbound_percent=((F('local_balance')+F('pending_outbound'))*100)/F('capacity'))
+        context = {
+            'channels': channels.order_by('alias'),
+            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
+            'graph_links': graph_links(),
+            'network_links': network_links(),
+            'local_settings': get_local_settings('EP-')
+        }
+        return render(request, 'emergency_fees.html', context)
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def peerevents(request):
     if request.method == 'GET':
         try:
@@ -2485,6 +2500,14 @@ def get_local_settings(*prefixes):
         form.append({'unit': '', 'form_id': 'mx_enabled', 'value': 0, 'label': 'MaxHTLC Updates', 'id': 'MX-Enabled', 'title': 'Enable/Disable automatic max HTLC updates', 'min':0, 'max':1})
         form.append({'unit': 'hours', 'form_id': 'mx_updateHours', 'value': 24, 'label': 'MX Update', 'id': 'MX-UpdateHours', 'title': 'Hours between applying max HTLC settings. Fractions allowed. Default 24', 'min':0.01, 'max':100})
         form.append({'unit': '%', 'form_id': 'mx_percent', 'value': 0, 'label': 'Offset %', 'id': 'MX-Percent', 'title': 'Default percent below outbound liquidity when no per-channel value is set', 'min':0, 'max':100})
+    if 'EP-' in prefixes:
+        form.append({'unit': '', 'form_id': 'update_channels', 'id': 'update_channels'})
+        form.append({'unit': '', 'form_id': 'ep_enabled', 'value': 0, 'label': 'Enable', 'id': 'EP-Enabled', 'title': 'Enable/Disable emergency fee increases', 'min':0, 'max':1})
+        form.append({'unit': '%', 'form_id': 'ep_target_default', 'value': 50, 'label': 'Default Target', 'id': 'EP-DefaultTarget', 'title': 'Default outbound liquidity target percent', 'min':0, 'max':100})
+        form.append({'unit': '%', 'form_id': 'ep_inc_pct', 'value': 10, 'label': 'Increase %', 'id': 'EP-IncreasePct', 'title': 'Percent increase when triggered', 'min':0})
+        form.append({'unit': 'min', 'form_id': 'ep_cooldown', 'value': 10, 'label': 'Cooldown', 'id': 'EP-Cooldown', 'title': 'Minutes between increases', 'min':1})
+        form.append({'unit': '%', 'form_id': 'ep_live_threshold', 'value': 40, 'label': 'Live Threshold', 'id': 'EP-LiveThreshold', 'title': 'Instant check threshold percent', 'min':0, 'max':100})
+        form.append({'unit': '%', 'form_id': 'ep_live_inc_pct', 'value': 5, 'label': 'Live Increase %', 'id': 'EP-LiveIncreasePct', 'title': 'Instant increase percent', 'min':0})
     if 'NODE_CACHE' in prefixes:
         form.append({'unit': 'min', 'form_id': 'node_cache_expiry_minutes', 'value': 60, 'label': 'Node Cache Expiry', 'id': 'NODE_CACHE_EXPIRY_MINUTES', 'title': 'Minutes node info is cached in memory and DB before refresh', 'min':1, 'max':10080})
         form.append({'unit': '', 'form_id': 'node_cache_max_entries', 'value': 500, 'label': 'Node Cache Size', 'id': 'NODE_CACHE_MAX_ENTRIES', 'title': 'Maximum number of node info objects kept in RAM', 'min':1, 'max':5000})
@@ -2548,6 +2571,13 @@ def update_settings(request):
                     {'form_id': 'mx_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'MX-Enabled'},
                     {'form_id': 'mx_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'MX-UpdateHours'},
                     {'form_id': 'mx_percent', 'value': 0, 'parse': lambda x: int(x),'id': 'MX-Percent'},
+                    #EP
+                    {'form_id': 'ep_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'EP-Enabled'},
+                    {'form_id': 'ep_target_default', 'value': 50, 'parse': lambda x: int(x),'id': 'EP-DefaultTarget'},
+                    {'form_id': 'ep_inc_pct', 'value': 10, 'parse': lambda x: float(x),'id': 'EP-IncreasePct'},
+                    {'form_id': 'ep_cooldown', 'value': 10, 'parse': lambda x: int(x),'id': 'EP-Cooldown'},
+                    {'form_id': 'ep_live_threshold', 'value': 40, 'parse': lambda x: int(x),'id': 'EP-LiveThreshold'},
+                    {'form_id': 'ep_live_inc_pct', 'value': 5, 'parse': lambda x: float(x),'id': 'EP-LiveIncreasePct'},
                     #GUI
                     {'form_id': 'gui_graphLinks', 'value': 'https://mempool.space/lightning', 'parse': lambda x: str(x),'id': 'GUI-GraphLinks'},
                     {'form_id': 'gui_netLinks', 'value': 'https://mempool.space', 'parse': lambda x: str(x),'id': 'GUI-NetLinks'},
@@ -2586,7 +2616,7 @@ def update_settings(request):
                     db_value.value = value
                     db_value.save()
 
-                    if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%','MX-Percent']:
+                    if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%','MX-Percent','EP-DefaultTarget','EP-IncreasePct','EP-Cooldown','EP-LiveThreshold','EP-LiveIncreasePct','EP-Enabled']:
                         if field['id'] == 'AR-Target%':
                             Channels.objects.all().update(ar_amt_target=Round(F('capacity')*(value/100), output_field=IntegerField()))
                         elif field['id'] == 'AR-Outbound%':
@@ -2597,6 +2627,18 @@ def update_settings(request):
                             Channels.objects.all().update(ar_max_cost=value)
                         elif field['id'] == 'MX-Percent':
                             Channels.objects.all().update(maxhtlc_percent=value)
+                        elif field['id'] == 'EP-DefaultTarget':
+                            Channels.objects.all().update(ep_target=value)
+                        elif field['id'] == 'EP-IncreasePct':
+                            Channels.objects.all().update(ep_inc_pct=value)
+                        elif field['id'] == 'EP-Cooldown':
+                            Channels.objects.all().update(ep_cooldown=value)
+                        elif field['id'] == 'EP-LiveThreshold':
+                            Channels.objects.all().update(ep_live_threshold=value)
+                        elif field['id'] == 'EP-LiveIncreasePct':
+                            Channels.objects.all().update(ep_live_inc_pct=value)
+                        elif field['id'] == 'EP-Enabled':
+                            Channels.objects.all().update(ep_enabled=bool(value))
                         messages.success(request, 'All channels ' + field['id'] + ' updated to: ' + str(value))
                     else:
                         messages.success(request, field['id'] + ' updated to: ' + str(value))
@@ -2715,6 +2757,30 @@ def update_channel(request):
                 db_channel.ar_source_ppm_diff = target
                 db_channel.save()
                 messages.success(request, 'Source ppm diff for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(target))
+            elif update_target == 16:
+                db_channel.ep_enabled = not db_channel.ep_enabled
+                db_channel.save()
+                messages.success(request, 'Emergency fees status for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') set to: ' + str(db_channel.ep_enabled))
+            elif update_target == 17:
+                db_channel.ep_target = int(target)
+                db_channel.save()
+                messages.success(request, 'Emergency target for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(target))
+            elif update_target == 18:
+                db_channel.ep_inc_pct = float(target)
+                db_channel.save()
+                messages.success(request, 'Emergency increase % for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(target))
+            elif update_target == 19:
+                db_channel.ep_cooldown = int(target)
+                db_channel.save()
+                messages.success(request, 'Emergency cooldown for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(target) + ' min')
+            elif update_target == 20:
+                db_channel.ep_live_threshold = int(target)
+                db_channel.save()
+                messages.success(request, 'Live threshold for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(target) + '%')
+            elif update_target == 21:
+                db_channel.ep_live_inc_pct = float(target)
+                db_channel.save()
+                messages.success(request, 'Live increase % for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(target))
             else:
                 messages.error(request, 'Invalid target code. Please try again.')
         else:
