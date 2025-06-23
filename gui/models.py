@@ -111,6 +111,7 @@ class Channels(models.Model):
     maxhtlc_updated = models.DateTimeField(null=True, default=None)
     mx_liq_threshold = models.BigIntegerField(default=0)
     mx_liq_value = models.BigIntegerField(default=0)
+    mx_liq_upper = models.BigIntegerField(default=0)
     local_disabled = models.BooleanField()
     local_cltv = models.IntegerField()
     local_min_htlc_msat = models.BigIntegerField()
