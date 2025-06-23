@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - Amboss Fees{% endblock %}
+{% block content %}
+{% load humanize dict_extras %}
+<div class="w3-container w3-padding-small">
+  <h2>Amboss Fee Data</h2>
+  <form method="get" style="margin-bottom:10px;">
+    <input type="hidden" name="fetch" value="1">
+    <button type="submit" class="w3-button w3-blue">Fetch Data</button>
+    <table class="w3-table-all w3-centered w3-hoverable">
+    <tr>
+      <th>Select</th>
+      <th>Peer PubKey</th>
+      <th>Peer Alias</th>
+      <th>Mean ({{ amb_time_range }})</th>
+      <th>Median ({{ amb_time_range }})</th>
+    </tr>
+    {% for row in results %}
+    <tr>
+      <td><input type="checkbox" name="pubkey" value="{{ row.pubkey }}" {% if row.pubkey in selected_pubkeys %}checked{% endif %}></td>
+      <td><a href="{{ graph_links }}/{{ network }}node/{{ row.pubkey }}" target="_blank">{{ row.pubkey }}</a></td>
+      <td>{{ row.alias }}</td>
+      <td>{% if row.mean %}{{ row.mean|floatformat:2 }}{% else %}---{% endif %}</td>
+      <td>{% if row.median %}{{ row.median|floatformat:2 }}{% else %}---{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </table>
+  </form>
+</div>
+{% if not results %}
+<div class="w3-container w3-padding-small">
+  <center><h1>No Amboss data available.</h1></center>
+</div>
+{% endif %}
+{% if local_settings %}
+{% include 'local_settings.html' with settings=local_settings title='Amboss' %}
+{% endif %}
+<script>
+  document.addEventListener('DOMContentLoaded', function(){
+    const enabled = {{ amb_enabled|default:0 }};
+    const hours = {{ amb_update_hours|default:0 }};
+    if(enabled && hours > 0){
+      setInterval(function(){ window.location.href = '/amboss-fees?fetch=1'; }, hours * 3600 * 1000);
+    }
+  });
+</script>
+{% endblock %}

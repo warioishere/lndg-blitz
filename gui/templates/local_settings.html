@@ -19,6 +19,7 @@
             {% if sett.form_id == 'af_updateHours' %}<small id="af_updateMinutes"></small>{% endif %}
             {% if sett.form_id == 'io_updateHours' %}<small id="io_updateMinutes"></small>{% endif %}
             {% if sett.form_id == 'mx_updateHours' %}<small id="mx_updateMinutes"></small>{% endif %}
+            {% if sett.form_id == 'amb_updateHours' %}<small id="amb_updateMinutes"></small>{% endif %}
           </div>
           {% endif %}
         </div>
@@ -66,6 +67,16 @@
       }
       mxInput.addEventListener('input', showMinutesMx);
       showMinutesMx();
+    }
+    const ambInput = document.getElementById('amb_updateHours');
+    const ambLabel = document.getElementById('amb_updateMinutes');
+    if (ambInput && ambLabel) {
+      function showMinutesAmb() {
+        const val = parseFloat(ambInput.value);
+        ambLabel.textContent = isNaN(val) ? '' : `(${Math.round(val * 60)} min)`;
+      }
+      ambInput.addEventListener('input', showMinutesAmb);
+      showMinutesAmb();
     }
   });
 </script>
