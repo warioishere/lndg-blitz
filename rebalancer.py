@@ -23,6 +23,7 @@ from gui.models import (
     Autopilot,
     RebalanceRoute,
     calc_success_ratio,
+    calc_weighted_ratio,
 )
 
 # map standard failure codes and internal details to enum names for clearer logs
@@ -159,8 +160,11 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
             RebalanceRoute.objects
             .filter(target_pubkey=pubkey, outgoing_chan_id__in=chan_ids)
             .filter(Q(last_failure__lt=cutoff) | Q(last_failure__isnull=True))
-            .annotate(ratio=calc_success_ratio(F('success_count'), F('failure_count')))
-            .order_by('-ratio')[:limit]
+            .annotate(
+                ratio=calc_success_ratio(F('success_count'), F('failure_count')),
+                weighted_ratio=calc_weighted_ratio(F('success_count'), F('failure_count')),
+            )
+            .order_by('-weighted_ratio')[:limit]
         )
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting saved routes: {str(e)}")

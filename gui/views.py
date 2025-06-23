@@ -13,7 +13,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
-from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, calc_success_ratio
+from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, calc_success_ratio, calc_weighted_ratio
 from gui.node_cache import get_node_info_cached, cache_stats
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
@@ -3193,9 +3193,10 @@ class RebalanceRouteViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = (
         RebalanceRoute.objects.annotate(
             ratio=calc_success_ratio(F('success_count'), F('failure_count')),
+            weighted_ratio=calc_weighted_ratio(F('success_count'), F('failure_count')),
             target_alias=Subquery(target_alias),
             outgoing_alias=Subquery(outgoing_alias),
-        ).order_by('target_alias', '-ratio')
+        ).order_by('target_alias', '-weighted_ratio')
     )
     serializer_class = RebalanceRouteSerializer
     filterset_fields = {'target_pubkey': ['exact'], 'outgoing_chan_id': ['exact']}

@@ -1,5 +1,16 @@
 from django.db import models
 from django.utils import timezone
+from django.db.models import (
+    ExpressionWrapper,
+    Value,
+    FloatField,
+)
+from django.db.models.functions import Cast
+
+
+def _is_django_expression(value) -> bool:
+    """Return True if value behaves like a Django expression (e.g., F)."""
+    return hasattr(value, "resolve_expression")
 
 # Create your models here.
 class Payments(models.Model):
@@ -437,8 +448,53 @@ class TradeSales(models.Model):
     sale_limit = models.IntegerField(null=True)
     sale_count = models.IntegerField(default=0)
 
+
 def calc_success_ratio(success_count, failure_count):
+    """Return basic success ratio or an expression for ORM usage."""
+    if _is_django_expression(success_count) or _is_django_expression(failure_count):
+        sc = (
+            Cast(success_count, FloatField())
+            if _is_django_expression(success_count)
+            else Value(float(success_count))
+        )
+        fc = (
+            Cast(failure_count, FloatField())
+            if _is_django_expression(failure_count)
+            else Value(float(failure_count))
+        )
+        numerator = sc + Value(1.0)
+        denominator = sc + fc + Value(2.0)
+        return ExpressionWrapper(numerator / denominator, output_field=FloatField())
     return (success_count + 1) / (success_count + failure_count + 2)
+
+
+def calc_weighted_ratio(success_count, failure_count, weight=10):
+    """Return success ratio weighted by number of attempts."""
+    if (
+        _is_django_expression(success_count)
+        or _is_django_expression(failure_count)
+        or _is_django_expression(weight)
+    ):
+        sc = (
+            Cast(success_count, FloatField())
+            if _is_django_expression(success_count)
+            else Value(float(success_count))
+        )
+        fc = (
+            Cast(failure_count, FloatField())
+            if _is_django_expression(failure_count)
+            else Value(float(failure_count))
+        )
+        wv = weight if _is_django_expression(weight) else Value(float(weight))
+        ratio = calc_success_ratio(sc, fc)
+        total = Cast(sc + fc, FloatField())
+        return ExpressionWrapper(
+            ratio * (total / (total + wv)),
+            output_field=FloatField(),
+        )
+    ratio = calc_success_ratio(success_count, failure_count)
+    total = success_count + failure_count
+    return ratio * (total / (total + weight)) if total + weight else ratio
 
 
 class RebalanceRoute(models.Model):
@@ -457,6 +513,18 @@ class RebalanceRoute(models.Model):
     @property
     def success_ratio(self) -> float:
         return calc_success_ratio(self.success_count, self.failure_count)
+
+    @property
+    def weighted_ratio(self) -> float:
+        """Return weighted ratio, using annotated value when available."""
+        if hasattr(self, "_weighted_ratio"):
+            return self._weighted_ratio
+        return calc_weighted_ratio(self.success_count, self.failure_count)
+
+    @weighted_ratio.setter
+    def weighted_ratio(self, value: float):
+        # allow QuerySet.annotate() to set this value without error
+        self._weighted_ratio = value
 
     class Meta:
         app_label = 'gui'
