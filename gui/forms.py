@@ -121,6 +121,7 @@ updates_channel_codes = [
 class UpdateChannel(forms.Form):
     chan_id = forms.IntegerField(label='chan_id')
     target = forms.FloatField(label='target')
+    update_target = forms.ChoiceField(label='update_target', choices=updates_channel_codes)
 
 
 class UpdateClosing(forms.Form):
