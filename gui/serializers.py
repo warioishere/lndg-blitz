@@ -242,6 +242,7 @@ class FailedHTLCSerializer(serializers.HyperlinkedModelSerializer):
 class RebalanceRouteSerializer(serializers.HyperlinkedModelSerializer):
     id = serializers.ReadOnlyField()
     success_ratio = serializers.ReadOnlyField()
+    weighted_ratio = serializers.ReadOnlyField()
     last_failure = serializers.ReadOnlyField()
     target_alias = serializers.CharField(read_only=True)
     outgoing_alias = serializers.CharField(read_only=True)

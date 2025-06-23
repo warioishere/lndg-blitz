@@ -38,6 +38,7 @@
         <th>Target Pubkey</th>
         <th>Outgoing Chan ID</th>
         <th>Success Ratio</th>
+        <th>Weighted Ratio</th>
         <th>Successes</th>
         <th>Failures</th>
         <th>Last Success</th>
@@ -59,7 +60,7 @@ async function loadRoutes(){
       const tb = (b.target_alias || b.target_pubkey).toLowerCase();
       if(ta < tb) return -1;
       if(ta > tb) return 1;
-      return b.success_ratio - a.success_ratio;
+      return b.weighted_ratio - a.weighted_ratio;
     });
     res.results.forEach(r => {
       const row = table.insertRow();
@@ -68,6 +69,7 @@ async function loadRoutes(){
       row.insertCell().innerText = (r.target_alias ? r.target_alias + ' - ' : '') + r.target_pubkey;
       row.insertCell().innerText = (r.outgoing_alias ? r.outgoing_alias + ' - ' : '') + r.outgoing_chan_id;
       row.insertCell().innerText = (r.success_ratio*100).toFixed(1)+'%';
+      row.insertCell().innerText = (r.weighted_ratio*100).toFixed(1)+'%';
       row.insertCell().innerText = r.success_count;
       row.insertCell().innerText = r.failure_count;
       row.insertCell().innerText = r.last_success ? formatDate(r.last_success) : '---';
