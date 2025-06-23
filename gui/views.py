@@ -487,14 +487,14 @@ def amboss_fees(request):
             stored_selected = [s for s in selected_setting.value.split(',') if s]
         selected_pubkeys = request.GET.getlist('pubkey') or stored_selected
         fetch_now = request.GET.get('fetch')
-        if fetch_now and api_key:
+        if fetch_now and api_key and selected_pubkeys:
             for ch in channels:
                 pubkey = ch['remote_pubkey']
                 row = {
                     'pubkey': pubkey,
                     'alias': ch['alias'],
                 }
-                if not selected_pubkeys or pubkey in selected_pubkeys:
+                if pubkey in selected_pubkeys:
                     logger.debug(f"Fetching amboss data for peer {pubkey}")
                     try:
                         fee_data = fetch_amboss_data(pubkey, api_key, time_range)
@@ -521,6 +521,17 @@ def amboss_fees(request):
                 selected_setting.save()
             else:
                 LocalSettings.objects.create(key='AMB-SelectedPeers', value=','.join(selected_pubkeys))
+        elif fetch_now and api_key:
+            logger.info("Amboss fetch requested with no peer selections")
+            for ch in channels:
+                stored = AmbossPeerFees.objects.filter(pubkey=ch['remote_pubkey']).first()
+                row = {
+                    'pubkey': ch['remote_pubkey'],
+                    'alias': ch['alias'],
+                    'mean': stored.mean_today if stored else None,
+                    'median': stored.median_today if stored else None,
+                }
+                results.append(row)
         elif not api_key:
             logger.warning("Amboss API key not configured")
         else:
