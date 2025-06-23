@@ -802,7 +802,9 @@ def auto_maxhtlc_job(stub):
     for ch in channels:
         outbound = ch.local_balance + ch.pending_outbound
         expected_msat = None
-        if ch.mx_liq_threshold and outbound < ch.mx_liq_threshold:
+        if ch.mx_liq_upper and outbound < ch.mx_liq_upper:
+            expected_msat = ch.mx_liq_value * 1000
+        elif ch.mx_liq_threshold and outbound < ch.mx_liq_threshold:
             expected_msat = ch.mx_liq_value * 1000
         else:
             percent = ch.maxhtlc_percent if ch.maxhtlc_percent else global_percent

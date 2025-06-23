@@ -307,6 +307,7 @@ Automatically adjust the `max_htlc_msat` for each channel. Define a percent offs
 
 - **mx_liq_threshold:** When outbound liquidity falls below this sat value, the override activates.
 - **mx_liq_value:** Fixed `max_htlc_msat` (in sats) applied while below the threshold.
+- **mx_liq_upper:** Keep the override active until outbound liquidity exceeds this value.
 - **MX-Percent:** Global percent offset when a channel has no specific percent configured.
 
 Once liquidity recovers above the threshold, the percent-based setting is applied again.

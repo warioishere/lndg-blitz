@@ -164,4 +164,5 @@ class MaxHtlcForm(forms.Form):
     percent = forms.IntegerField(label='percent')
     mx_liq_threshold = forms.IntegerField(label='mx_liq_threshold', required=False)
     mx_liq_value = forms.IntegerField(label='mx_liq_value', required=False)
+    mx_liq_upper = forms.IntegerField(label='mx_liq_upper', required=False)
 

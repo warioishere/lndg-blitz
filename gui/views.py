@@ -2134,10 +2134,12 @@ def auto_maxhtlc(request):
             percent = int(form.cleaned_data['percent'])
             mx_liq_threshold = int(form.cleaned_data.get('mx_liq_threshold') or 0)
             mx_liq_value = int(form.cleaned_data.get('mx_liq_value') or 0)
+            mx_liq_upper = int(form.cleaned_data.get('mx_liq_upper') or 0)
             db_channel = Channels.objects.get(chan_id=chan_id)
             db_channel.maxhtlc_percent = percent
             db_channel.mx_liq_threshold = mx_liq_threshold
             db_channel.mx_liq_value = mx_liq_value
+            db_channel.mx_liq_upper = mx_liq_upper
             outbound = db_channel.local_balance + db_channel.pending_outbound
             target = int(outbound * (100 - percent) / 100)
             try:
