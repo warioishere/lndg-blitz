@@ -473,6 +473,7 @@ def amboss_fees(request):
         key_setting = LocalSettings.objects.filter(key='AMB-ApiKey').first()
         enabled_setting = LocalSettings.objects.filter(key='AMB-Enabled').first()
         update_setting = LocalSettings.objects.filter(key='AMB-UpdateHours').first()
+        selected_setting = LocalSettings.objects.filter(key='AMB-SelectedPeers').first()
         api_key = key_setting.value if key_setting else ''
         auto_enabled = int(enabled_setting.value) if enabled_setting else 0
         update_hours = float(update_setting.value) if update_setting and update_setting.value else 0
@@ -481,7 +482,10 @@ def amboss_fees(request):
         )
         time_range = "TODAY"
         results = []
-        selected_pubkeys = request.GET.getlist('pubkey')
+        stored_selected = []
+        if selected_setting and selected_setting.value:
+            stored_selected = [s for s in selected_setting.value.split(',') if s]
+        selected_pubkeys = request.GET.getlist('pubkey') or stored_selected
         fetch_now = request.GET.get('fetch')
         if fetch_now and api_key:
             for ch in channels:
@@ -512,6 +516,11 @@ def amboss_fees(request):
                     row['mean'] = None
                     row['median'] = None
                 results.append(row)
+            if selected_setting:
+                selected_setting.value = ','.join(selected_pubkeys)
+                selected_setting.save()
+            else:
+                LocalSettings.objects.create(key='AMB-SelectedPeers', value=','.join(selected_pubkeys))
         elif not api_key:
             logger.warning("Amboss API key not configured")
         else:
@@ -2480,7 +2489,10 @@ def get_local_settings(*prefixes):
         form.append({'unit': 'days', 'form_id': 'lnd_retentionDays', 'value': 30, 'label': 'LND Retention', 'id': 'LND-RetentionDays', 'title': 'LND Retention days for failed payment data', 'min':1, 'max':1000})
 
     for prefix in prefixes:
-        ar_settings = LocalSettings.objects.filter(key__contains=prefix).values('key', 'value').order_by('key')
+        query = LocalSettings.objects.filter(key__contains=prefix)
+        if prefix == 'AMB-':
+            query = query.exclude(key='AMB-SelectedPeers')
+        ar_settings = query.values('key', 'value').order_by('key')
         for field in form:
             for sett in ar_settings:
                 if field['id'] == sett['key']:
