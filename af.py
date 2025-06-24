@@ -5,13 +5,30 @@ from os import environ
 from pandas import DataFrame, Series
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
-from gui.models import Forwards, Channels, LocalSettings, FailedHTLCs
+from gui.models import Forwards, Channels, LocalSettings, FailedHTLCs, Payments
 from utils import get_local_setting
 
 def main(channels):
     channels_df = DataFrame.from_records(channels.values())
     if channels_df.shape[0] == 0:
         return DataFrame()
+    lookback = get_local_setting('FLP-Lookback', 10, int)
+    flp_enabled_global = get_local_setting('FLP-Enabled', '0', str) == '1'
+    flp_safety_global = get_local_setting('FLP-Safety', 0, int)
+    avg_costs = {}
+    for ch in channels:
+        payments = (
+            Payments.objects.filter(status=2, rebal_chan=ch.chan_id)
+            .order_by('-creation_date')[:lookback]
+        )
+        ppm_values = [
+            (p.fee * 1000000 / p.value) for p in payments if p.value
+        ]
+        if ppm_values:
+            avg_costs[ch.chan_id] = int(sum(ppm_values) / len(ppm_values))
+        else:
+            avg_costs[ch.chan_id] = None
+    channels_df['avg_rebalance_cost'] = channels_df['chan_id'].map(avg_costs)
     filter_1day = datetime.now() - timedelta(days=1)
     filter_4h = datetime.now() - timedelta(hours=4)
     filter_7day = datetime.now() - timedelta(days=7)
@@ -25,6 +42,8 @@ def main(channels):
     excess_limit = get_local_setting('AF-ExcessLimit', 95, int)
     lowliq_boost = get_local_setting('AF-LowLiqBoost', 1.0, float)
     boost_ar_only = get_local_setting('AF-LowLiqBoostAR', '0', str) == '1'
+    excess_boost = get_local_setting('AF-ExcessBoost', 1.0, float)
+    excess_boost_enabled = get_local_setting('AF-ExcessBoostOn', '0', str) == '1'
     peer_rate_check = get_local_setting('AF-PeerRateCheck', '0', str) == '1'
     peer_rate_limit = get_local_setting('AF-PeerRateLimit', 0, int)
     if lowliq_limit >= excess_limit:
@@ -216,23 +235,32 @@ def main(channels):
             return (5 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and
                                     row['total_amt_routed_in_1day'] == 0) else 0
         elif row['overall_out_percent'] >= excess_limit:
-            if row['total_amt_routed_in_4h'] + row['total_amt_routed_out_4h'] < 1000:
-                return -1  # kleiner Schritt nach unten (1 ppm), Kanal voll aber wenig Traffic
-            else:
-                return 0
+            adj = -1
+            if excess_boost_enabled:
+                adj = int(adj * excess_boost)
+            return adj
         elif row['overall_out_percent'] < excess_limit:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
-                return -3 * multiplier
+                adj = -3 * multiplier
+                if excess_boost_enabled:
+                    adj = int(adj * excess_boost)
+                return adj
             elif row['group_net_routed_7day'] > 1:
                 return (2 * multiplier) * (1 + row['group_net_routed_7day'])
             else:
                 return 0
         else:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
-                return -5 * multiplier
+                adj = -5 * multiplier
+                if excess_boost_enabled:
+                    adj = int(adj * excess_boost)
+                return adj
             elif (row['group_net_routed_7day'] < 0 and
                 row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10):
-                return -5 * multiplier
+                adj = -5 * multiplier
+                if excess_boost_enabled:
+                    adj = int(adj * excess_boost)
+                return adj
             else:
                 return 0
 
@@ -242,6 +270,22 @@ def main(channels):
     channels_df['new_rate'] = channels_df['local_fee_rate'] + channels_df['adjustment']
     channels_df['new_rate'] = (channels_df['new_rate'] / increment).round(0) * increment
     channels_df['new_rate'] = channels_df['new_rate'].clip(min_rate, max_rate)
+    def compute_cost_floor(row):
+        if not flp_enabled_global or not row.get('flp_enabled'):
+            return 0
+        avg_cost = row.get('avg_rebalance_cost')
+        if avg_cost is None:
+            return 0
+        safety = flp_safety_global + row.get('flp_safety', 0)
+        return max(avg_cost - safety, 0)
+
+    channels_df['cost_floor'] = (
+        channels_df.apply(compute_cost_floor, axis=1)
+        .round(0)
+        .clip(upper=max_rate)
+        .fillna(0)
+    )
+    channels_df['new_rate'] = channels_df[['new_rate', 'cost_floor']].max(axis=1)
     channels_df['adjustment'] = channels_df['new_rate'] - channels_df['local_fee_rate']
 
     # Compute new inbound rates

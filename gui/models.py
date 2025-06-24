@@ -153,6 +153,8 @@ class Channels(models.Model):
     ep_cooldown = models.IntegerField(default=10)
     ep_live_threshold = models.IntegerField(default=40)
     ep_live_inc_pct = models.FloatField(default=5)
+    flp_enabled = models.BooleanField(default=False)
+    flp_safety = models.IntegerField(default=0)
     ep_updated = models.DateTimeField(default=timezone.now)
     fees_updated = models.DateTimeField(default=timezone.now)
     auto_fees = models.BooleanField()

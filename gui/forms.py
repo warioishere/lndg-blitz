@@ -67,6 +67,11 @@ class AutoFeesForm(AutoRebalanceForm):
     af_peer_rate_limit = forms.IntegerField(label='af_peer_rate_limit', required=False)
     af_peer_rate_check = forms.IntegerField(label='af_peer_rate_check', required=False)
     af_excess = forms.IntegerField(label='af_excess', required=False)
+    af_excessboost = forms.FloatField(label='af_excessboost', required=False)
+    af_excessboost_on = forms.IntegerField(label='af_excessboost_on', required=False)
+    flp_enabled = forms.IntegerField(label='flp_enabled', required=False)
+    flp_safety = forms.IntegerField(label='flp_safety', required=False)
+    flp_lookback = forms.IntegerField(label='flp_lookback', required=False)
 
 class GUIForm(AutoFeesForm):
     gui_graphLinks = forms.CharField(label='gui_graphLinks', required=False)
@@ -116,6 +121,8 @@ updates_channel_codes = [
     (19, 'ep_cooldown'),
     (20, 'ep_live_threshold'),
     (21, 'ep_live_inc_pct'),
+    (22, 'flp_enabled'),
+    (23, 'flp_safety'),
 ]
 
 class UpdateChannel(forms.Form):
