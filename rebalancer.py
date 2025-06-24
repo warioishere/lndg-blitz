@@ -25,6 +25,7 @@ from gui.models import (
     calc_success_ratio,
     calc_weighted_ratio,
 )
+from utils import get_local_setting
 
 # map standard failure codes and internal details to enum names for clearer logs
 FAILURE_CODE_NAMES = {
@@ -128,8 +129,7 @@ def get_active_rebalance_pubkeys():
 @sync_to_async
 def get_route_limit():
     try:
-        setting = LocalSettings.objects.filter(key='RR-RouteLimit').first()
-        return int(setting.value) if setting else 10
+        return get_local_setting('RR-RouteLimit', 10, int)
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting route limit: {str(e)}")
         return 10
@@ -137,8 +137,7 @@ def get_route_limit():
 @sync_to_async
 def routes_collection_enabled():
     try:
-        setting = LocalSettings.objects.filter(key='RR-CollectRoutes').first()
-        return False if setting and setting.value == '0' else True
+        return get_local_setting('RR-CollectRoutes', '1', str) != '0'
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting route collect setting: {str(e)}")
         return True
@@ -146,8 +145,7 @@ def routes_collection_enabled():
 @sync_to_async
 def saved_routes_enabled():
     try:
-        setting = LocalSettings.objects.filter(key='RR-UseSavedRoutes').first()
-        return False if setting and setting.value == '0' else True
+        return get_local_setting('RR-UseSavedRoutes', '1', str) != '0'
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting saved route setting: {str(e)}")
         return True
@@ -173,7 +171,7 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
 @sync_to_async
 def update_route(pubkey, chan_id, route_hex, success=True):
     try:
-        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+        if get_local_setting('RR-CollectRoutes', '1', str) == '0':
             return
         parsed = ln.Route()
         parsed.ParseFromString(bytes.fromhex(route_hex))
@@ -207,7 +205,7 @@ def update_route(pubkey, chan_id, route_hex, success=True):
 @sync_to_async
 def purge_stale_routes():
     try:
-        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+        if get_local_setting('RR-CollectRoutes', '1', str) == '0':
             return
         cutoff = timezone.now() - timedelta(days=7)
         RebalanceRoute.objects.filter(Q(last_success__lt=cutoff) | Q(last_success__isnull=True)).delete()
@@ -217,7 +215,7 @@ def purge_stale_routes():
 @sync_to_async
 def mark_route_failure(sr):
     try:
-        if LocalSettings.objects.filter(key='RR-CollectRoutes', value='0').exists():
+        if get_local_setting('RR-CollectRoutes', '1', str) == '0':
             return
         sr.failure_count += 1
         sr.last_failure = timezone.now()
@@ -227,16 +225,10 @@ def mark_route_failure(sr):
 
 @sync_to_async
 def check_and_set_allow_multishards():
-    allow_multishards = True  # Default value is True
-    disable_mpp_setting = LocalSettings.objects.filter(key='LND-DisableMPP').first()
-    
-    if disable_mpp_setting:
-        if int(disable_mpp_setting.value) > 0:
-            allow_multishards = False
-    else:
-        # If the setting does not exist, create it with a default value of '0'
-        LocalSettings.objects.create(key='LND-DisableMPP', value='0')
-    
+    allow_multishards = True
+    disable_val = get_local_setting('LND-DisableMPP', 0, int)
+    if disable_val > 0:
+        allow_multishards = False
     return allow_multishards
 
 async def run_rebalancer(rebalance, worker):
@@ -534,11 +526,7 @@ def auto_schedule() -> List[Rebalancer]:
     try:
         #No rebalancer jobs have been scheduled, lets look for any channels with an auto_rebalance flag and make the best request if we find one
         to_schedule = []
-        if LocalSettings.objects.filter(key='AR-Enabled').exists():
-            enabled = int(LocalSettings.objects.filter(key='AR-Enabled')[0].value)
-        else:
-            LocalSettings(key='AR-Enabled', value='0').save()
-            enabled = 0
+        enabled = get_local_setting('AR-Enabled', 0, int)
         if enabled == 0:
             return []
         
@@ -546,10 +534,8 @@ def auto_schedule() -> List[Rebalancer]:
         if len(auto_rebalance_channels) == 0:
             return []
         
-        if not LocalSettings.objects.filter(key='AR-Outbound%').exists():
-            LocalSettings(key='AR-Outbound%', value='75').save()
-        if not LocalSettings.objects.filter(key='AR-Inbound%').exists():
-            LocalSettings(key='AR-Inbound%', value='90').save()
+        get_local_setting('AR-Outbound%', 75, int)
+        get_local_setting('AR-Inbound%', 90, int)
         active_pubkeys = get_active_rebalance_pubkeys()
         outbound_cans = list(
             auto_rebalance_channels
@@ -577,25 +563,11 @@ def auto_schedule() -> List[Rebalancer]:
         if len(inbound_cans) == 0 or len(outbound_cans) == 0:
             return []
         
-        if LocalSettings.objects.filter(key='AR-MaxFeeRate').exists():
-            max_fee_rate = int(LocalSettings.objects.filter(key='AR-MaxFeeRate')[0].value)
-        else:
-            LocalSettings(key='AR-MaxFeeRate', value='500').save()
-            max_fee_rate = 500
-        if LocalSettings.objects.filter(key='AR-Variance').exists():
-            variance = int(LocalSettings.objects.filter(key='AR-Variance')[0].value)
-        else:
-            LocalSettings(key='AR-Variance', value='0').save()
-            variance = 0
-        if LocalSettings.objects.filter(key='AR-WaitPeriod').exists():
-            wait_period = int(LocalSettings.objects.filter(key='AR-WaitPeriod')[0].value)
-        else:
-            LocalSettings(key='AR-WaitPeriod', value='30').save()
-            wait_period = 30
-        if not LocalSettings.objects.filter(key='AR-Target%').exists():
-            LocalSettings(key='AR-Target%', value='3').save()
-        if not LocalSettings.objects.filter(key='AR-MaxCost%').exists():
-            LocalSettings(key='AR-MaxCost%', value='65').save()
+        max_fee_rate = get_local_setting('AR-MaxFeeRate', 500, int)
+        variance = get_local_setting('AR-Variance', 0, int)
+        wait_period = get_local_setting('AR-WaitPeriod', 30, int)
+        get_local_setting('AR-Target%', 3, int)
+        get_local_setting('AR-MaxCost%', 65, int)
         allowed_map = {}
         for entry in AllowedTarget.objects.select_related('source_chan').all():
             allowed_map.setdefault(entry.source_chan.chan_id, []).append(entry.target_pubkey)
@@ -619,16 +591,15 @@ def auto_schedule() -> List[Rebalancer]:
                 target_fee = round(target_fee_rate*target_value*0.000001, 3) if target_fee_rate <= max_fee_rate else round(max_fee_rate*target_value*0.000001, 3)
                 if target_fee == 0:
                     continue
-                if LocalSettings.objects.filter(key='AR-Time').exists():
-                    target_time = int(LocalSettings.objects.filter(key='AR-Time')[0].value)
-                else:
-                    LocalSettings(key='AR-Time', value='5').save()
-                    target_time = 5
+                target_time = get_local_setting('AR-Time', 5, int)
                 if Rebalancer.objects.filter(last_hop_pubkey=pub).exclude(status=0).exists():
                     last_rebalance = Rebalancer.objects.filter(last_hop_pubkey=pub).exclude(status=0).order_by('-id')[0]
                     if not (last_rebalance.status == 2 or (last_rebalance.status > 2 and (int((datetime.now() - last_rebalance.stop).total_seconds() / 60) > wait_period)) or (last_rebalance.status == 1 and ((int((datetime.now() - last_rebalance.start).total_seconds() / 60) - last_rebalance.duration) > wait_period))):
                         continue
                 new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str([source_id]), last_hop_pubkey=pub, target_alias=target.alias, duration=target_time)
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Creating Auto Rebalance Request for allowed target {pub} via {source_id}")
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Value: {target_value} / {target.ar_amt_target} | Fee: {target_fee} | Duration: {target_time}")
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: {[source_id]}")
                 new_rebalance.save()
                 to_schedule.append(new_rebalance)
                 scheduled_targets.add(pub)
@@ -643,11 +614,7 @@ def auto_schedule() -> List[Rebalancer]:
                 if target_fee == 0:
                     continue
             
-                if LocalSettings.objects.filter(key='AR-Time').exists():
-                    target_time = int(LocalSettings.objects.filter(key='AR-Time')[0].value)
-                else:
-                    LocalSettings(key='AR-Time', value='5').save()
-                    target_time = 5
+                target_time = get_local_setting('AR-Time', 5, int)
                 # TLDR: willing to pay 1 sat for every value_per_fee sats moved
                 if Rebalancer.objects.filter(last_hop_pubkey=target.remote_pubkey).exclude(status=0).exists():
                     last_rebalance = Rebalancer.objects.filter(last_hop_pubkey=target.remote_pubkey).exclude(status=0).order_by('-id')[0]
@@ -667,16 +634,8 @@ def auto_schedule() -> List[Rebalancer]:
 @sync_to_async
 def auto_enable():
     try:
-        if LocalSettings.objects.filter(key='AR-Autopilot').exists():
-            enabled = int(LocalSettings.objects.filter(key='AR-Autopilot')[0].value)
-        else:
-            LocalSettings(key='AR-Autopilot', value='0').save()
-            enabled = 0
-        if LocalSettings.objects.filter(key='AR-APDays').exists():
-            apdays = int(LocalSettings.objects.filter(key='AR-APDays')[0].value)
-        else:
-            LocalSettings(key='AR-APDays', value='7').save()
-            apdays = 7
+        enabled = get_local_setting('AR-Autopilot', 0, int)
+        apdays = get_local_setting('AR-APDays', 7, int)
         if enabled == 1:
             lookup_channels=Channels.objects.filter(is_active=True, is_open=True, private=False)
             channels = lookup_channels.values('remote_pubkey').annotate(outbound_percent=((Sum('local_balance')+Sum('pending_outbound'))*1000)/Sum('capacity')).annotate(inbound_percent=((Sum('remote_balance')+Sum('pending_inbound'))*1000)/Sum('capacity')).order_by()
@@ -792,10 +751,7 @@ async def start_queue(worker_count=1):
 
 @sync_to_async
 def get_worker_count():
-    if LocalSettings.objects.filter(key='AR-Workers').exists():
-        return int(LocalSettings.objects.filter(key='AR-Workers')[0].value)
-    else:
-        return 1
+    return get_local_setting('AR-Workers', 1, int)
 
 async def update_worker_count():
     global worker_count, shutdown_rebalancer
@@ -809,11 +765,7 @@ async def update_worker_count():
 
 def main():
     global scheduled_rebalances, active_rebalances, shutdown_rebalancer, worker_count
-    if LocalSettings.objects.filter(key='AR-Workers').exists():
-        worker_count = int(LocalSettings.objects.filter(key='AR-Workers')[0].value)
-    else:
-        LocalSettings(key='AR-Workers', value='1').save()
-        worker_count = 1
+    worker_count = get_local_setting('AR-Workers', 1, int)
     try:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Rebalancer initializing...")
         loop = asyncio.new_event_loop()

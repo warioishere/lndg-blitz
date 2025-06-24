@@ -6,6 +6,7 @@ from pandas import DataFrame, Series
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
 from gui.models import Forwards, Channels, LocalSettings, FailedHTLCs
+from utils import get_local_setting
 
 def main(channels):
     channels_df = DataFrame.from_records(channels.values())
@@ -14,66 +15,18 @@ def main(channels):
     filter_1day = datetime.now() - timedelta(days=1)
     filter_4h = datetime.now() - timedelta(hours=4)
     filter_7day = datetime.now() - timedelta(days=7)
-    if LocalSettings.objects.filter(key='AF-MaxRate').exists():
-        max_rate = int(LocalSettings.objects.filter(key='AF-MaxRate')[0].value)
-    else:
-        LocalSettings(key='AF-MaxRate', value='2500').save()
-        max_rate = 2500
-    if LocalSettings.objects.filter(key='AF-MinRate').exists():
-        min_rate = int(LocalSettings.objects.filter(key='AF-MinRate')[0].value)
-    else:
-        LocalSettings(key='AF-MinRate', value='0').save()
-        min_rate = 0
-    if LocalSettings.objects.filter(key='AF-Increment').exists():
-        increment = int(LocalSettings.objects.filter(key='AF-Increment')[0].value)
-    else:
-        LocalSettings(key='AF-Increment', value='5').save()
-        increment = 5
-    if LocalSettings.objects.filter(key='AF-Multiplier').exists():
-        multiplier = int(LocalSettings.objects.filter(key='AF-Multiplier')[0].value)
-    else:
-        LocalSettings(key='AF-Multiplier', value='5').save()
-        multiplier = 5
-    if LocalSettings.objects.filter(key='AF-FailedHTLCs').exists():
-        failed_htlc_limit = int(LocalSettings.objects.filter(key='AF-FailedHTLCs')[0].value)
-    else:
-        LocalSettings(key='AF-FailedHTLCs', value='25').save()
-        failed_htlc_limit = 25
-    if LocalSettings.objects.filter(key='AF-UpdateHours').exists():
-        update_hours = float(LocalSettings.objects.filter(key='AF-UpdateHours').get().value)
-    else:
-        LocalSettings(key='AF-UpdateHours', value='24').save()
-        update_hours = 24.0
-    if LocalSettings.objects.filter(key='AF-LowLiqLimit').exists():
-        lowliq_limit = int(LocalSettings.objects.filter(key='AF-LowLiqLimit').get().value)
-    else:
-        LocalSettings(key='AF-LowLiqLimit', value='15').save()
-        lowliq_limit = 5
-    if LocalSettings.objects.filter(key='AF-ExcessLimit').exists():
-        excess_limit = int(LocalSettings.objects.filter(key='AF-ExcessLimit').get().value)
-    else:
-        LocalSettings(key='AF-ExcessLimit', value='95').save()
-        excess_limit = 95
-    if LocalSettings.objects.filter(key='AF-LowLiqBoost').exists():
-        lowliq_boost = float(LocalSettings.objects.filter(key='AF-LowLiqBoost').get().value)
-    else:
-        LocalSettings(key='AF-LowLiqBoost', value='1').save()
-        lowliq_boost = 1.0
-    if LocalSettings.objects.filter(key='AF-LowLiqBoostAR').exists():
-        boost_ar_only = LocalSettings.objects.filter(key='AF-LowLiqBoostAR').get().value == '1'
-    else:
-        LocalSettings(key='AF-LowLiqBoostAR', value='0').save()
-        boost_ar_only = False
-    if LocalSettings.objects.filter(key='AF-PeerRateCheck').exists():
-        peer_rate_check = LocalSettings.objects.filter(key='AF-PeerRateCheck').get().value == '1'
-    else:
-        LocalSettings(key='AF-PeerRateCheck', value='0').save()
-        peer_rate_check = False
-    if LocalSettings.objects.filter(key='AF-PeerRateLimit').exists():
-        peer_rate_limit = int(LocalSettings.objects.filter(key='AF-PeerRateLimit').get().value)
-    else:
-        LocalSettings(key='AF-PeerRateLimit', value='0').save()
-        peer_rate_limit = 0
+    max_rate = get_local_setting('AF-MaxRate', 2500, int)
+    min_rate = get_local_setting('AF-MinRate', 0, int)
+    increment = get_local_setting('AF-Increment', 5, int)
+    multiplier = get_local_setting('AF-Multiplier', 5, int)
+    failed_htlc_limit = get_local_setting('AF-FailedHTLCs', 25, int)
+    update_hours = get_local_setting('AF-UpdateHours', 24.0, float)
+    lowliq_limit = get_local_setting('AF-LowLiqLimit', 5, int)
+    excess_limit = get_local_setting('AF-ExcessLimit', 95, int)
+    lowliq_boost = get_local_setting('AF-LowLiqBoost', 1.0, float)
+    boost_ar_only = get_local_setting('AF-LowLiqBoostAR', '0', str) == '1'
+    peer_rate_check = get_local_setting('AF-PeerRateCheck', '0', str) == '1'
+    peer_rate_limit = get_local_setting('AF-PeerRateLimit', 0, int)
     if lowliq_limit >= excess_limit:
         print('Invalid thresholds detected, using defaults...')
         lowliq_limit = 5
