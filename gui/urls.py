@@ -76,6 +76,7 @@ urlpatterns = [
     path('autopilot/', views.autopilot, name='autopilot'),
     path('autofees/', views.outbound_fee_log, name='outbound-fee-log'),
     path('inbound-fee-log/', views.inbound_fee_log, name='inbound-fee-log'),
+    path('fee-limit-protection/', views.fee_limit_protection, name='fee-limit-protection'),
     path('peerevents', views.peerevents, name='peerevents'),
     path('advanced/', views.advanced, name='advanced'),
     path('advanced_rebalancing', views.advanced_rebalancing, name='advanced-rebalancing'),

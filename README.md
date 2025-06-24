@@ -331,15 +331,31 @@ Customize Auto-Fees (AF) behavior via the settings page:
 - `AF-LowLiqBoostAR`: When `1`, apply the low-liquidity boost only to channels with Auto-Rebalance enabled; `0` disables the boost entirely.
 - `AF-PeerRateLimit`: Maximum peer oRate (ppm) for applying low-liquidity fee increases. `0` disables this check.
 - `AF-PeerRateCheck`: Enable (`1`) or disable (`0`) the peer oRate limit evaluation.
-- `AF-ExcessLimit`: Outbound liquidity (%) threshold above which the "Excess Liquidity" fee algorithm applies.
+- `AF-ExcessLimit`: Outbound liquidity (%) threshold that triggers automatic fee decreases.
+- `AF-ExcessBoost`: Scaling factor applied to the excess-liquidity decrease step (default: 1).
+- `AF-ExcessBoostOn`: Set to `1` to enable the boost factor; `0` disables it.
 
 ### Auto-Fees Notes
 
 1.  AF adjustments occur only if `AF-UpdateHours` have passed since the last LNDg fee update for that channel (fractions are supported).
 2.  Channels below `AF-LowLiqLimit`% outbound liquidity may see fee increases based on failed HTLCs and incoming flow. When `AF-PeerRateCheck` is enabled, increases only occur if the peer's oRate is below `AF-PeerRateLimit`.
-3.  Channels above `AF-ExcessLimit`% outbound liquidity may see fee decreases based on lack of flow or assisted revenue.
+3.  Channels above `AF-ExcessLimit`% outbound liquidity always decrease by 1&nbsp;ppm (scaled by `AF-ExcessBoost` when enabled).
 4.  Channels between these limits adjust based on overall flow patterns.
 5.  View AF change history in the "Autofees" tab.
+
+## Fee Limit Protection (FLP)
+
+Ensure AutoFee never drops outbound rates below recent rebalancing costs.
+
+- `FLP-Enabled`: Global switch for enforcing the fee floor.
+- `FLP-Safety`: Safety distance in ppm subtracted from the average cost.
+- `FLP-Lookback`: Number of successful rebalance payments to average.
+
+Enable the "Update Channels" option on the Fee Limit Protection page to apply
+`FLP-Enabled` and `FLP-Safety` to all channels at once.
+
+Each channel has its own `flp_enabled` flag and `flp_safety` value. The floor is
+`avg_cost - (FLP-Safety + flp_safety)` if enabled.
 
 ## Emergency Fee Increases
 

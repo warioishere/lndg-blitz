@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 from secrets import token_bytes
 from trade import create_trade_details
 import af
+from utils import get_local_setting
 
 def graph_links():
     if LocalSettings.objects.filter(key='GUI-GraphLinks').exists():
@@ -2215,6 +2216,27 @@ def inbound_offset(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def fee_limit_protection(request):
+    if request.method == 'GET':
+        lookback = get_local_setting('FLP-Lookback', 10, int)
+        channels = Channels.objects.filter(is_open=True, auto_rebalance=True)
+        channel_list = []
+        for ch in channels:
+            payments = Payments.objects.filter(status=2, rebal_chan=ch.chan_id).order_by('-creation_date')[:lookback]
+            ppm_values = [(p.fee * 1000000 / p.value) for p in payments if p.value]
+            avg_ppm = int(sum(ppm_values) / len(ppm_values)) if ppm_values else None
+            channel_list.append({'chan_id': ch.chan_id, 'alias': ch.alias, 'avg_ppm': avg_ppm, 'flp_enabled': ch.flp_enabled, 'flp_safety': ch.flp_safety})
+        context = {
+            'channels': channel_list,
+            'local_settings': get_local_settings('FLP-'),
+            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
+            'graph_links': graph_links(),
+        }
+        return render(request, 'af_fee_limit.html', context)
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def auto_maxhtlc(request):
     if request.method == 'GET':
         channels = Channels.objects.filter(is_open=True).annotate(outbound=F('local_balance') + F('pending_outbound'))
@@ -2493,6 +2515,13 @@ def get_local_settings(*prefixes):
         form.append({'unit': 'ppm', 'form_id': 'af_peer_rate_limit', 'value': 0, 'label': 'Peer oRate Limit', 'id': 'AF-PeerRateLimit', 'title': 'Only raise fees if peer oRate below this limit; 0 disables', 'min':0, 'max':5000})
         form.append({'unit': '', 'form_id': 'af_peer_rate_check', 'value': 0, 'label': 'Peer Rate Check', 'id': 'AF-PeerRateCheck', 'title': 'Enable/Disable peer oRate limit check', 'min':0, 'max':1})
         form.append({'unit': '%', 'form_id': 'af_excess', 'value': 95, 'label': 'AF Excess', 'id': 'AF-ExcessLimit', 'title': 'Limit for running excess liq AF rules (decrease for stagnant channels and those with assisting revenues). Default 95', 'min':0, 'max':100})
+        form.append({'unit': 'x', 'form_id': 'af_excessboost', 'value': 1, 'label': 'AF Excess Boost', 'id': 'AF-ExcessBoost', 'title': 'Multiplier for extra fee drop when liquidity exceeds AF-ExcessLimit. Default 1', 'min':0, 'max':10})
+        form.append({'unit': '', 'form_id': 'af_excessboost_on', 'value': 0, 'label': 'Excess Boost', 'id': 'AF-ExcessBoostOn', 'title': 'Enable/Disable extra decrease for excess liquidity', 'min':0, 'max':1})
+    if 'FLP-' in prefixes:
+        form.append({'unit': '', 'form_id': 'update_channels', 'id': 'update_channels'})
+        form.append({'unit': '', 'form_id': 'flp_enabled', 'value': 0, 'label': 'FLP Enabled', 'id': 'FLP-Enabled', 'title': 'Enable/Disable fee limit protection', 'min':0, 'max':1})
+        form.append({'unit': 'ppm', 'form_id': 'flp_safety', 'value': 0, 'label': 'Safety Distance', 'id': 'FLP-Safety', 'title': 'Subtract this value from avg cost when computing the floor', 'min':0})
+        form.append({'unit': '', 'form_id': 'flp_lookback', 'value': 10, 'label': 'Payments Lookback', 'id': 'FLP-Lookback', 'title': 'Number of recent rebalancing payments to average', 'min':1})
     if 'IO-' in prefixes:
         form.append({'unit': '', 'form_id': 'io_enabled', 'value': 0, 'label': 'Offset Updates', 'id': 'IO-Enabled', 'title': 'Enable/Disable automatic inbound offset updates', 'min':0, 'max':1})
         form.append({'unit': 'hours', 'form_id': 'io_updateHours', 'value': 24, 'label': 'IO Update', 'id': 'IO-UpdateHours', 'title': 'Hours between applying inbound offsets. Fractions allowed. Default 24', 'min':0.01, 'max':100})
@@ -2564,6 +2593,11 @@ def update_settings(request):
                     {'form_id': 'af_peer_rate_limit', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-PeerRateLimit'},
                     {'form_id': 'af_peer_rate_check', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-PeerRateCheck'},
                     {'form_id': 'af_excess', 'value': 95, 'parse': lambda x: int(x),'id': 'AF-ExcessLimit'},
+                    {'form_id': 'af_excessboost', 'value': 1, 'parse': lambda x: float(x),'id': 'AF-ExcessBoost'},
+                    {'form_id': 'af_excessboost_on', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-ExcessBoostOn'},
+                    {'form_id': 'flp_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'FLP-Enabled'},
+                    {'form_id': 'flp_safety', 'value': 0, 'parse': lambda x: int(x),'id': 'FLP-Safety'},
+                    {'form_id': 'flp_lookback', 'value': 10, 'parse': lambda x: int(x),'id': 'FLP-Lookback'},
                     #IO
                     {'form_id': 'io_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'IO-Enabled'},
                     {'form_id': 'io_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'IO-UpdateHours'},
@@ -2616,7 +2650,7 @@ def update_settings(request):
                     db_value.value = value
                     db_value.save()
 
-                    if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%','MX-Percent','EP-DefaultTarget','EP-IncreasePct','EP-Cooldown','EP-LiveThreshold','EP-LiveIncreasePct','EP-Enabled']:
+                    if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%','MX-Percent','EP-DefaultTarget','EP-IncreasePct','EP-Cooldown','EP-LiveThreshold','EP-LiveIncreasePct','EP-Enabled','FLP-Enabled','FLP-Safety']:
                         if field['id'] == 'AR-Target%':
                             Channels.objects.all().update(ar_amt_target=Round(F('capacity')*(value/100), output_field=IntegerField()))
                         elif field['id'] == 'AR-Outbound%':
@@ -2639,6 +2673,10 @@ def update_settings(request):
                             Channels.objects.all().update(ep_live_inc_pct=value)
                         elif field['id'] == 'EP-Enabled':
                             Channels.objects.all().update(ep_enabled=bool(value))
+                        elif field['id'] == 'FLP-Enabled':
+                            Channels.objects.all().update(flp_enabled=bool(value))
+                        elif field['id'] == 'FLP-Safety':
+                            Channels.objects.all().update(flp_safety=value)
                         messages.success(request, 'All channels ' + field['id'] + ' updated to: ' + str(value))
                     else:
                         messages.success(request, field['id'] + ' updated to: ' + str(value))
@@ -2781,6 +2819,14 @@ def update_channel(request):
                 db_channel.ep_live_inc_pct = float(target)
                 db_channel.save()
                 messages.success(request, 'Live increase % for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(target))
+            elif update_target == 22:
+                db_channel.flp_enabled = not db_channel.flp_enabled
+                db_channel.save()
+                messages.success(request, 'Fee limit protection for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') set to: ' + str(db_channel.flp_enabled))
+            elif update_target == 23:
+                db_channel.flp_safety = int(target)
+                db_channel.save()
+                messages.success(request, 'FLP safety for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to: ' + str(db_channel.flp_safety))
             else:
                 messages.error(request, 'Invalid target code. Please try again.')
         else:
