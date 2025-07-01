@@ -48,6 +48,14 @@ def main(channels):
     peer_rate_limit = get_local_setting('AF-PeerRateLimit', 0, int)
     flow_scale = get_local_setting('AF-FlowScale', 1.0, float)
     max_step = get_local_setting('AF-MaxStep', 100, int)
+    MAX_NET_FLOW = 3
+
+    def clamp_flow(val):
+        if val > MAX_NET_FLOW:
+            return MAX_NET_FLOW
+        if val < -MAX_NET_FLOW:
+            return -MAX_NET_FLOW
+        return val
     if lowliq_limit >= excess_limit:
         print('Invalid thresholds detected, using defaults...')
         lowliq_limit = 5
@@ -206,7 +214,8 @@ def main(channels):
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
                 adj = 7 * multiplier
             elif row['group_net_routed_7day'] > 1:
-                scale = 1 + row['group_net_routed_7day'] * flow_scale
+                flow = clamp_flow(row['group_net_routed_7day'])
+                scale = 1 + flow * flow_scale
                 adj = (-5 * multiplier) * scale
             else:
                 adj = 0
@@ -214,10 +223,12 @@ def main(channels):
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
                 adj = 12 * multiplier
             elif (
-                row['group_net_routed_7day'] < 0
+                row['group_net_routed_7day'] < -1
                 and row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10
             ):
-                adj = 12 * multiplier
+                flow = abs(clamp_flow(row['group_net_routed_7day']))
+                scale = 1 + flow * flow_scale
+                adj = 12 * multiplier * scale
             else:
                 adj = 0
         return clamp_step(adj)
@@ -262,9 +273,11 @@ def main(channels):
                 adj = -3 * multiplier
                 if excess_boost_enabled:
                     adj = int(adj * excess_boost)
-            elif row['group_net_routed_7day'] > 1:
-                scale = 1 + row['group_net_routed_7day'] * flow_scale
-                adj = (2 * multiplier) * scale
+            elif abs(row['group_net_routed_7day']) > 1:
+                flow = clamp_flow(row['group_net_routed_7day'])
+                scale = 1 + abs(flow) * flow_scale
+                base = 2 * multiplier if flow > 0 else -5 * multiplier
+                adj = base * scale
             else:
                 adj = 0
             return clamp_step(adj)
@@ -274,12 +287,15 @@ def main(channels):
                 if excess_boost_enabled:
                     adj = int(adj * excess_boost)
             elif (
-                row['group_net_routed_7day'] < 0
+                row['group_net_routed_7day'] < -1
                 and row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10
             ):
+                flow = abs(clamp_flow(row['group_net_routed_7day']))
+                scale = 1 + flow * flow_scale
                 adj = -5 * multiplier
                 if excess_boost_enabled:
                     adj = int(adj * excess_boost)
+                adj *= scale
             else:
                 adj = 0
             return clamp_step(adj)
