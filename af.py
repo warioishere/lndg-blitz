@@ -46,6 +46,16 @@ def main(channels):
     excess_boost_enabled = get_local_setting('AF-ExcessBoostOn', '0', str) == '1'
     peer_rate_check = get_local_setting('AF-PeerRateCheck', '0', str) == '1'
     peer_rate_limit = get_local_setting('AF-PeerRateLimit', 0, int)
+    flow_scale = get_local_setting('AF-FlowScale', 1.0, float)
+    max_step = get_local_setting('AF-MaxStep', 100, int)
+    MAX_NET_FLOW = 3
+
+    def clamp_flow(val):
+        if val > MAX_NET_FLOW:
+            return MAX_NET_FLOW
+        if val < -MAX_NET_FLOW:
+            return -MAX_NET_FLOW
+        return val
     if lowliq_limit >= excess_limit:
         print('Invalid thresholds detected, using defaults...')
         lowliq_limit = 5
@@ -187,25 +197,43 @@ def main(channels):
     ).where(group_df['total_capacity'] > 0, 0)
 
     # Define inbound adjustment calculation function
+    HIGH_FLOW_FACTOR = 0.25
+
+    def clamp_step(val):
+        if val > max_step:
+            return max_step
+        if val < -max_step:
+            return -max_step
+        return int(val)
+
     def compute_inbound_adjustment(row):
         if row['overall_out_percent'] <= lowliq_limit:
-            return (-12 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and
-                                    row['total_amt_routed_in_1day'] == 0) else 0
+            adj = (-12 * multiplier) if (
+                row['total_failed_out_1day'] > failed_htlc_limit
+                and row['total_amt_routed_in_1day'] == 0
+            ) else 0
         elif row['overall_out_percent'] < excess_limit:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
-                return 7 * multiplier
+                adj = 7 * multiplier
             elif row['group_net_routed_7day'] > 1:
-                return (-5 * multiplier) * (1 + row['group_net_routed_7day'])
+                flow = clamp_flow(row['group_net_routed_7day'])
+                scale = 1 + flow * flow_scale
+                adj = (-5 * multiplier * HIGH_FLOW_FACTOR) * scale
             else:
-                return 0
+                adj = 0
         else:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
-                return 12 * multiplier
-            elif (row['group_net_routed_7day'] < 0 and
-                row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10):
-                return 12 * multiplier
+                adj = 12 * multiplier
+            elif (
+                row['group_net_routed_7day'] < -1
+                and row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10
+            ):
+                flow = abs(clamp_flow(row['group_net_routed_7day']))
+                scale = 1 + flow * flow_scale
+                adj = 12 * multiplier * HIGH_FLOW_FACTOR * scale
             else:
-                return 0
+                adj = 0
+        return clamp_step(adj)
 
     group_df['inbound_adjustment'] = group_df.apply(compute_inbound_adjustment, axis=1)
 
@@ -229,40 +257,50 @@ def main(channels):
             if boost_ar_only and row.get('auto_rebalance'):
                 deficit = max(0, lowliq_limit - row['out_percent'])
                 boost = deficit / max(lowliq_limit, 1) * lowliq_boost
-            return max(1, int(multiplier * boost))
+            return clamp_step(max(1, int(multiplier * boost)))
 
         if row['overall_out_percent'] <= lowliq_limit:
-            return (5 * multiplier) if (row['total_failed_out_1day'] > failed_htlc_limit and
-                                    row['total_amt_routed_in_1day'] == 0) else 0
+            adj = (5 * multiplier) if (
+                row['total_failed_out_1day'] > failed_htlc_limit
+                and row['total_amt_routed_in_1day'] == 0
+            ) else 0
+            return clamp_step(adj)
         elif row['overall_out_percent'] >= excess_limit:
             adj = -1
             if excess_boost_enabled:
                 adj = int(adj * excess_boost)
-            return adj
+            return clamp_step(adj)
         elif row['overall_out_percent'] < excess_limit:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
                 adj = -3 * multiplier
                 if excess_boost_enabled:
                     adj = int(adj * excess_boost)
-                return adj
-            elif row['group_net_routed_7day'] > 1:
-                return (2 * multiplier) * (1 + row['group_net_routed_7day'])
+            elif abs(row['group_net_routed_7day']) > 1:
+                flow = clamp_flow(row['group_net_routed_7day'])
+                scale = 1 + abs(flow) * flow_scale
+                base = (2 * multiplier if flow > 0 else -5 * multiplier) * HIGH_FLOW_FACTOR
+                adj = base * scale
             else:
-                return 0
+                adj = 0
+            return clamp_step(adj)
         else:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
                 adj = -5 * multiplier
                 if excess_boost_enabled:
                     adj = int(adj * excess_boost)
-                return adj
-            elif (row['group_net_routed_7day'] < 0 and
-                row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10):
-                adj = -5 * multiplier
+            elif (
+                row['group_net_routed_7day'] < -1
+                and row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10
+            ):
+                flow = abs(clamp_flow(row['group_net_routed_7day']))
+                scale = 1 + flow * flow_scale
+                adj = -5 * multiplier * HIGH_FLOW_FACTOR
                 if excess_boost_enabled:
                     adj = int(adj * excess_boost)
-                return adj
+                adj *= scale
             else:
-                return 0
+                adj = 0
+            return clamp_step(adj)
 
     channels_df['adjustment'] = channels_df.apply(compute_outbound_adjustment, axis=1)
 

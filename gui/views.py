@@ -2507,6 +2507,8 @@ def get_local_settings(*prefixes):
         form.append({'unit': 'ppm', 'form_id': 'af_minRate', 'value': 0, 'label': 'AF Min Rate', 'id': 'AF-MinRate', 'title': 'Minimum Rate that can be adjusted to. Default 0', 'min':0, 'max':5000})
         form.append({'unit': 'ppm', 'form_id': 'af_increment', 'value': 5, 'label': 'AF Increment', 'id': 'AF-Increment', 'title': 'Target fee rate will always be a multiple of this value. Default 5', 'min':1, 'max':100})
         form.append({'unit': 'x', 'form_id': 'af_multiplier', 'value': 5, 'label': 'AF Multiplier', 'id': 'AF-Multiplier', 'title': 'Multiplier to be applied to Auto-Fee adjustments. Default 5', 'min':1, 'max':100})
+        form.append({'unit': 'x', 'form_id': 'af_flow_scale', 'value': 1.0, 'label': 'Flow Scale', 'id': 'AF-FlowScale', 'title': 'Scale flow-based adjustments; 0 disables flow factor', 'min':0})
+        form.append({'unit': 'ppm', 'form_id': 'af_maxstep', 'value': 100, 'label': 'Max Step', 'id': 'AF-MaxStep', 'title': 'Maximum change allowed per update', 'min':1})
         form.append({'unit': '', 'form_id': 'af_failedHTLCs', 'value': 25, 'label': 'AF FailedHTLCs', 'id': 'AF-FailedHTLCs', 'title': 'Failed HTLCs required since last fee update to trigger a fee increase (when chan liq% is below AR-LowLiq). Default 25', 'min':1, 'max':100})
         form.append({'unit': 'hours', 'form_id': 'af_updateHours', 'value': 24, 'label': 'AF Update', 'id': 'AF-UpdateHours', 'title': 'Minimum number of hours between fee updates for an individual channel. Default 24', 'min':0.01, 'max':100})
         form.append({'unit': '%', 'form_id': 'af_lowliq', 'value': 15, 'label': 'AF LowLiq', 'id': 'AF-LowLiqLimit', 'title': 'Limit for running low liq AF rules (increase when failed htlcs + no inbound). Default 15', 'min':0, 'max':100})
@@ -2584,8 +2586,10 @@ def update_settings(request):
                     {'form_id': 'af_maxRate', 'value': 2500, 'parse': lambda x: int(x),'id': 'AF-MaxRate'},
                     {'form_id': 'af_minRate', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-MinRate'},
                     {'form_id': 'af_increment', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-Increment'},
-                    {'form_id': 'af_multiplier', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-Multiplier'},
-                    {'form_id': 'af_failedHTLCs', 'value': 25, 'parse': lambda x: int(x),'id': 'AF-FailedHTLCs'},
+                     {'form_id': 'af_multiplier', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-Multiplier'},
+                     {'form_id': 'af_flow_scale', 'value': 1.0, 'parse': lambda x: float(x),'id': 'AF-FlowScale'},
+                     {'form_id': 'af_maxstep', 'value': 100, 'parse': lambda x: int(x),'id': 'AF-MaxStep'},
+                     {'form_id': 'af_failedHTLCs', 'value': 25, 'parse': lambda x: int(x),'id': 'AF-FailedHTLCs'},
                     {'form_id': 'af_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'AF-UpdateHours'},
                     {'form_id': 'af_lowliq', 'value': 15, 'parse': lambda x: int(x),'id': 'AF-LowLiqLimit'},
                     {'form_id': 'af_lowliqboost', 'value': 1, 'parse': lambda x: float(x),'id': 'AF-LowLiqBoost'},

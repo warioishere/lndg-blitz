@@ -59,6 +59,8 @@ class AutoFeesForm(AutoRebalanceForm):
     af_minRate = forms.IntegerField(label='af_minRate', required=False)
     af_increment = forms.IntegerField(label='af_increment', required=False)
     af_multiplier = forms.IntegerField(label='af_multiplier', required=False)
+    af_flow_scale = forms.FloatField(label='af_flow_scale', required=False)
+    af_maxstep = forms.IntegerField(label='af_maxstep', required=False)
     af_failedHTLCs = forms.IntegerField(label='af_failedHTLCs', required=False)
     af_updateHours = forms.FloatField(label='af_updateHours', required=False)
     af_lowliq = forms.IntegerField(label='af_lowliq', required=False)
