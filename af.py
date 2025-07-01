@@ -197,6 +197,8 @@ def main(channels):
     ).where(group_df['total_capacity'] > 0, 0)
 
     # Define inbound adjustment calculation function
+    HIGH_FLOW_FACTOR = 0.25
+
     def clamp_step(val):
         if val > max_step:
             return max_step
@@ -216,7 +218,7 @@ def main(channels):
             elif row['group_net_routed_7day'] > 1:
                 flow = clamp_flow(row['group_net_routed_7day'])
                 scale = 1 + flow * flow_scale
-                adj = (-5 * multiplier) * scale
+                adj = (-5 * multiplier * HIGH_FLOW_FACTOR) * scale
             else:
                 adj = 0
         else:
@@ -228,7 +230,7 @@ def main(channels):
             ):
                 flow = abs(clamp_flow(row['group_net_routed_7day']))
                 scale = 1 + flow * flow_scale
-                adj = 12 * multiplier * scale
+                adj = 12 * multiplier * HIGH_FLOW_FACTOR * scale
             else:
                 adj = 0
         return clamp_step(adj)
@@ -276,7 +278,7 @@ def main(channels):
             elif abs(row['group_net_routed_7day']) > 1:
                 flow = clamp_flow(row['group_net_routed_7day'])
                 scale = 1 + abs(flow) * flow_scale
-                base = 2 * multiplier if flow > 0 else -5 * multiplier
+                base = (2 * multiplier if flow > 0 else -5 * multiplier) * HIGH_FLOW_FACTOR
                 adj = base * scale
             else:
                 adj = 0
@@ -292,7 +294,7 @@ def main(channels):
             ):
                 flow = abs(clamp_flow(row['group_net_routed_7day']))
                 scale = 1 + flow * flow_scale
-                adj = -5 * multiplier
+                adj = -5 * multiplier * HIGH_FLOW_FACTOR
                 if excess_boost_enabled:
                     adj = int(adj * excess_boost)
                 adj *= scale

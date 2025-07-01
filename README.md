@@ -326,6 +326,7 @@ Customize Auto-Fees (AF) behavior via the settings page:
 - `AF-MinRate`: Minimum fee rate (ppm) AF can set.
 - `AF-Multiplier`: Multiplies the `AF-Increment` for larger fee adjustments.
 - `AF-FlowScale`: Scales flow-based adjustments for both heavy inbound and outbound peers (0 disables flow scaling; effect is capped internally).
+- High-flow peers have their base adjustment reduced by 75% before applying `AF-FlowScale`.
 - `AF-MaxStep`: Maximum ppm change allowed per update.
  - `AF-UpdateHours`: Minimum hours between AF adjustments for a single channel (default: 24). This field accepts fractions to run more frequently; multiply by 60 to convert to minutes (e.g. `0.08` ≈ 5 minutes).
 - `AF-LowLiqLimit`: Outbound liquidity (%) threshold below which the "Low Liquidity" fee algorithm applies.
