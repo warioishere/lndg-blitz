@@ -1,5 +1,5 @@
 import django
-from django.db.models import Sum
+from django.db.models import Sum, Max
 from datetime import datetime, timedelta
 from os import environ
 from pandas import DataFrame, Series
@@ -65,6 +65,16 @@ def main(channels):
     forwards = Forwards.objects.filter(forward_date__gte=filter_7day, amt_out_msat__gte=1000000)
     forwards_1d = forwards.filter(forward_date__gte=filter_1day)
     forwards_4h = forwards.filter(forward_date__gte=filter_4h)
+
+    # For last forward tracking
+    last_forward_out_df = DataFrame.from_records(
+        forwards.values('chan_id_out').annotate(last_out=Max('forward_date')),
+        index='chan_id_out'
+    ) if forwards.exists() else DataFrame()
+    last_forward_in_df = DataFrame.from_records(
+        forwards.values('chan_id_in').annotate(last_in=Max('forward_date')),
+        index='chan_id_in'
+    ) if forwards.exists() else DataFrame()
     
     forwards_df_in_1d_sum = DataFrame.from_records(
         forwards_1d.values('chan_id_in').annotate(amt_out_msat=Sum('amt_out_msat'), fee=Sum('fee')), 
@@ -120,6 +130,20 @@ def main(channels):
     channels_df['out_percent'] = ((channels_df['local_balance'] / channels_df['capacity']) * 100).round(0).astype(int)
     channels_df['in_percent'] = ((channels_df['remote_balance'] / channels_df['capacity']) * 100).round(0).astype(int)
     channels_df['eligible'] = (datetime.now() - channels_df['fees_updated']).dt.total_seconds() > (update_hours * 3600)
+
+    # Time since last forward
+    if not last_forward_out_df.empty:
+        channels_df['last_forward_out'] = channels_df['chan_id'].map(last_forward_out_df['last_out'])
+    else:
+        channels_df['last_forward_out'] = None
+    if not last_forward_in_df.empty:
+        channels_df['last_forward_in'] = channels_df['chan_id'].map(last_forward_in_df['last_in'])
+    else:
+        channels_df['last_forward_in'] = None
+    channels_df['last_forward'] = channels_df[['last_forward_out', 'last_forward_in']].max(axis=1)
+    channels_df['hours_since_last_forward'] = (
+        datetime.now() - channels_df['last_forward']
+    ).dt.total_seconds().div(3600).fillna(99999)
 
     # Compute failed HTLCs per channel
     filter_last_updated = datetime.now() - timedelta(hours=update_hours)
@@ -258,6 +282,15 @@ def main(channels):
                 deficit = max(0, lowliq_limit - row['out_percent'])
                 boost = deficit / max(lowliq_limit, 1) * lowliq_boost
             return clamp_step(max(1, int(multiplier * boost)))
+
+        # Gradually decrease fees when no flow is detected
+        if lowliq_limit < row['overall_out_percent'] < excess_limit:
+            hours_idle = row.get('hours_since_last_forward', 0)
+            if row['fees_updated'] < row.get('last_forward'):
+                if hours_idle >= 2:
+                    return clamp_step(-2)
+            elif hours_idle >= 6:
+                return clamp_step(-2)
 
         if row['overall_out_percent'] <= lowliq_limit:
             adj = (5 * multiplier) if (
