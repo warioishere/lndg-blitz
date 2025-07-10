@@ -11,6 +11,7 @@
       <th>Capacity</th>
       <th>Limit PPM</th>
       <th>PPM Diff</th>
+      <th>Out Target</th>
       <th>Targets</th>
     </tr>
     {% for entry in sources %}
@@ -32,16 +33,25 @@
         </div>
       </td>
       <td class="w3-center" style="vertical-align:middle">{{ entry.limit }}</td>
-      <td class="w3-center" style="vertical-align:middle">
-        <form action="/update_channel/" method="post" class="w3-center">
-          {% csrf_token %}
-          <input type="number" name="target" value="{{ entry.channel.ar_source_ppm_diff }}" style="text-align:center;width:80px" />
-          <input type="hidden" name="chan_id" value="{{ entry.channel.chan_id }}" />
-          <input type="hidden" name="update_target" value="15" />
-          <input type="submit" value="Save" />
-        </form>
-      </td>
-      <td class="w3-center" style="vertical-align:middle">
+        <td class="w3-center" style="vertical-align:middle">
+          <form action="/update_channel/" method="post" class="w3-center">
+            {% csrf_token %}
+            <input type="number" name="target" value="{{ entry.channel.ar_source_ppm_diff }}" style="text-align:center;width:80px" />
+            <input type="hidden" name="chan_id" value="{{ entry.channel.chan_id }}" />
+            <input type="hidden" name="update_target" value="15" />
+            <input type="submit" value="Save" />
+          </form>
+        </td>
+        <td class="w3-center" style="vertical-align:middle;{% if entry.channel.ar_source %}background-color: rgba(46,160,67,0.15){% else %}background-color: rgba(248,81,73,0.15){% endif %}">
+          <form action="/update_channel/" method="post" class="w3-center">
+            {% csrf_token %}
+            <input type="number" name="target" value="{{ entry.channel.ar_out_target }}" style="text-align:center;width:80px" min="1" max="100" />
+            <input type="hidden" name="chan_id" value="{{ entry.channel.chan_id }}" />
+            <input type="hidden" name="update_target" value="4" />
+            <input type="submit" value="Save" />
+          </form>
+        </td>
+        <td class="w3-center" style="vertical-align:middle">
         <form action="/advanced_rebalancing" method="post" class="w3-center" style="display:flex;align-items:center;justify-content:center">
           {% csrf_token %}
           <input type="hidden" name="source_chan_id" value="{{ entry.channel.chan_id }}" />
