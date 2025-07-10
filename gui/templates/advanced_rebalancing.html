@@ -42,7 +42,7 @@
             <input type="submit" value="Save" />
           </form>
         </td>
-        <td class="w3-center" style="vertical-align:middle;{% if entry.channel.auto_rebalance == False %}background-color: rgba(46,160,67,0.15){% else %}background-color: rgba(248,81,73,0.15){% endif %}">
+        <td class="w3-center" style="vertical-align:middle;{% if entry.channel.ar_source %}background-color: rgba(46,160,67,0.15){% else %}background-color: rgba(248,81,73,0.15){% endif %}">
           <form action="/update_channel/" method="post" class="w3-center">
             {% csrf_token %}
             <input type="number" name="target" value="{{ entry.channel.ar_out_target }}" style="text-align:center;width:80px" min="1" max="100" />
