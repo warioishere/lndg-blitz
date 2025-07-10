@@ -28,9 +28,9 @@ from lndg import settings
 from os import path
 from pandas import DataFrame, merge
 from requests import get
-import time
 import logging
-from amboss import fetch_amboss_data, AmbossAPIError
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from amboss import fetch_amboss_data
 
 logger = logging.getLogger(__name__)
 from secrets import token_bytes
@@ -489,34 +489,41 @@ def amboss_fees(request):
         selected_pubkeys = request.GET.getlist('pubkey') or stored_selected
         fetch_now = request.GET.get('fetch')
         if fetch_now and api_key and selected_pubkeys:
-            for ch in channels:
+            selected_set = set(selected_pubkeys)
+            def fetch_peer(ch):
                 pubkey = ch['remote_pubkey']
-                row = {
-                    'pubkey': pubkey,
-                    'alias': ch['alias'],
-                }
-                if pubkey in selected_pubkeys:
+                row = {'pubkey': pubkey, 'alias': ch['alias']}
+                if pubkey in selected_set:
                     logger.debug(f"Fetching amboss data for peer {pubkey}")
                     try:
-                        fee_data = fetch_amboss_data(pubkey, api_key, time_range)
-                    except AmbossAPIError as e:
-                        fee_data = {}
+                        fee_data = fetch_amboss_data(pubkey, api_key, time_range, timeout=5)
+                        row['mean'] = fee_data.get('mean')
+                        row['median'] = fee_data.get('median')
+                        AmbossPeerFees.objects.update_or_create(
+                            pubkey=pubkey,
+                            defaults={
+                                'mean_today': row['mean'],
+                                'median_today': row['median'],
+                                'updated_at': timezone.now(),
+                            },
+                        )
+                    except Exception as e:
                         logger.error(f"Amboss error for {pubkey}: {e}")
-                    row['mean'] = fee_data.get('mean')
-                    row['median'] = fee_data.get('median')
-                    AmbossPeerFees.objects.update_or_create(
-                        pubkey=pubkey,
-                        defaults={
-                            'mean_today': row['mean'],
-                            'median_today': row['median'],
-                            'updated_at': timezone.now(),
-                        },
-                    )
-                    time.sleep(0.05)
+                        row['mean'] = None
+                        row['median'] = None
                 else:
                     row['mean'] = None
                     row['median'] = None
-                results.append(row)
+                return row
+
+            with ThreadPoolExecutor(max_workers=min(10, len(channels))) as ex:
+                futures = {ex.submit(fetch_peer, ch): idx for idx, ch in enumerate(channels)}
+                results_tmp = [None] * len(channels)
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    results_tmp[idx] = fut.result()
+                results.extend(results_tmp)
+
             if selected_setting:
                 selected_setting.value = ','.join(selected_pubkeys)
                 selected_setting.save()

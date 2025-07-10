@@ -5,7 +5,7 @@ import logging
 class AmbossAPIError(Exception):
     pass
 
-def fetch_amboss_data(pubkey, api_key, time_range="TODAY"):
+def fetch_amboss_data(pubkey, api_key, time_range="TODAY", timeout=10):
     amboss_url = "https://api.amboss.space/graphql"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -34,7 +34,9 @@ def fetch_amboss_data(pubkey, api_key, time_range="TODAY"):
     payload = {"query": query, "variables": variables}
     try:
         logging.debug(f"Fetching {pubkey} data for {time_range}")
-        response = requests.post(amboss_url, json=payload, headers=headers)
+        response = requests.post(
+            amboss_url, json=payload, headers=headers, timeout=timeout
+        )
         response.raise_for_status()
         data = response.json()
         logging.debug(
