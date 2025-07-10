@@ -7,7 +7,7 @@ from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps import signer_pb2 as lns
 from gui.lnd_deps import signer_pb2_grpc as lnsigner
-from gui.lnd_deps.lnd_connect import lnd_connect
+from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
 from lndg import settings
 from os import environ
 from requests import get
@@ -911,10 +911,11 @@ def agg_failed_htlcs():
     agg_htlcs(FailedHTLCs.objects.filter(timestamp__lte=time_filter).exclude(failure_detail__in=[6, 99])[:100], 'other')
 
 def main():
+    channel = get_shared_channel()
     while True:
         print(f"{datetime.now().strftime('%c')} : [Data] : Starting data execution...")
         try:
-            stub = lnrpc.LightningStub(lnd_connect())
+            stub = lnrpc.LightningStub(channel)
             #Update data
             update_peers(stub)
             refresh_peer_aliases(stub)
@@ -933,6 +934,8 @@ def main():
             agg_failed_htlcs()
         except Exception as e:
             print(f"{datetime.now().strftime('%c')} : [Data] : Error processing background data: {str(e)}")
+            close_shared_channel()
+            channel = get_shared_channel()
         print(f"{datetime.now().strftime('%c')} : [Data] : Data execution completed...sleeping for 20 seconds")
         sleep(20)
 

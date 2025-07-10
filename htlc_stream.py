@@ -4,7 +4,7 @@ from gui.lnd_deps import router_pb2 as lnr
 from gui.lnd_deps import router_pb2_grpc as lnrouter
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
-from gui.lnd_deps.lnd_connect import lnd_connect
+from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
 from os import environ
 from time import sleep
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
@@ -16,7 +16,7 @@ def main():
     while True:
         try:
             print(f"{datetime.now().strftime('%c')} : [HTLC] : Starting failed HTLC stream...")
-            connection = lnd_connect()
+            connection = get_shared_channel()
             routerstub = lnrouter.RouterStub(connection)
             lightning_stub = lnrpc.LightningStub(connection)
             all_forwards = {}
@@ -65,6 +65,8 @@ def main():
                         del all_forwards[key]
         except Exception as e:
             print(f"{datetime.now().strftime('%c')} : [HTLC] : Error while running failed HTLC stream: {str(e)}")
+        finally:
+            close_shared_channel()
             sleep(20)
 
 if __name__ == '__main__':

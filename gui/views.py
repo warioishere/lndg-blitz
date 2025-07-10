@@ -28,9 +28,9 @@ from lndg import settings
 from os import path
 from pandas import DataFrame, merge
 from requests import get
-import time
 import logging
-from amboss import fetch_amboss_data, AmbossAPIError
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from amboss import fetch_amboss_data
 
 logger = logging.getLogger(__name__)
 from secrets import token_bytes
@@ -489,34 +489,41 @@ def amboss_fees(request):
         selected_pubkeys = request.GET.getlist('pubkey') or stored_selected
         fetch_now = request.GET.get('fetch')
         if fetch_now and api_key and selected_pubkeys:
-            for ch in channels:
+            selected_set = set(selected_pubkeys)
+            def fetch_peer(ch):
                 pubkey = ch['remote_pubkey']
-                row = {
-                    'pubkey': pubkey,
-                    'alias': ch['alias'],
-                }
-                if pubkey in selected_pubkeys:
+                row = {'pubkey': pubkey, 'alias': ch['alias']}
+                if pubkey in selected_set:
                     logger.debug(f"Fetching amboss data for peer {pubkey}")
                     try:
-                        fee_data = fetch_amboss_data(pubkey, api_key, time_range)
-                    except AmbossAPIError as e:
-                        fee_data = {}
+                        fee_data = fetch_amboss_data(pubkey, api_key, time_range, timeout=5)
+                        row['mean'] = fee_data.get('mean')
+                        row['median'] = fee_data.get('median')
+                        AmbossPeerFees.objects.update_or_create(
+                            pubkey=pubkey,
+                            defaults={
+                                'mean_today': row['mean'],
+                                'median_today': row['median'],
+                                'updated_at': timezone.now(),
+                            },
+                        )
+                    except Exception as e:
                         logger.error(f"Amboss error for {pubkey}: {e}")
-                    row['mean'] = fee_data.get('mean')
-                    row['median'] = fee_data.get('median')
-                    AmbossPeerFees.objects.update_or_create(
-                        pubkey=pubkey,
-                        defaults={
-                            'mean_today': row['mean'],
-                            'median_today': row['median'],
-                            'updated_at': timezone.now(),
-                        },
-                    )
-                    time.sleep(0.05)
+                        row['mean'] = None
+                        row['median'] = None
                 else:
                     row['mean'] = None
                     row['median'] = None
-                results.append(row)
+                return row
+
+            with ThreadPoolExecutor(max_workers=min(10, len(channels))) as ex:
+                futures = {ex.submit(fetch_peer, ch): idx for idx, ch in enumerate(channels)}
+                results_tmp = [None] * len(channels)
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    results_tmp[idx] = fut.result()
+                results.extend(results_tmp)
+
             if selected_setting:
                 selected_setting.value = ','.join(selected_pubkeys)
                 selected_setting.save()
@@ -2636,54 +2643,64 @@ def update_settings(request):
             messages.error(request, 'Invalid Request. Please try again.')
         else:
             update_channels = form.cleaned_data['update_channels']
+            existing_settings = {ls.key: ls for ls in LocalSettings.objects.all()}
+            channel_updates = {}
+            channel_messages = []
             for field in template:
                 value = form.cleaned_data[field['form_id']]
-                if value is not None:
-                    try:
-                        value = field['parse'](value)
-                    except Exception:
-                        messages.error(request, f"Invalid value for {field['id']}")
+                if value is None:
+                    continue
+                try:
+                    value = field['parse'](value)
+                except Exception:
+                    messages.error(request, f"Invalid value for {field['id']}")
+                    continue
+                db_value = existing_settings.get(field['id'])
+                if db_value is None:
+                    if len(str(value)) == 0:
                         continue
-                    try:
-                        db_value = LocalSettings.objects.get(key=field['id'])
-                    except:
-                        LocalSettings(key=field['id'], value=field['value']).save()
-                        db_value = LocalSettings.objects.get(key=field['id'])
-                    if db_value.value == str(value) or len(str(value)) == 0:
-                        continue
+                    db_value = LocalSettings(key=field['id'], value=value)
+                    db_value.save()
+                    existing_settings[field['id']] = db_value
+                    messages.success(request, f"{field['id']} updated to: {value}")
+                elif db_value.value != str(value) and len(str(value)) > 0:
                     db_value.value = value
                     db_value.save()
+                    messages.success(request, f"{field['id']} updated to: {value}")
 
-                    if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%','MX-Percent','EP-DefaultTarget','EP-IncreasePct','EP-Cooldown','EP-LiveThreshold','EP-LiveIncreasePct','EP-Enabled','FLP-Enabled','FLP-Safety']:
-                        if field['id'] == 'AR-Target%':
-                            Channels.objects.all().update(ar_amt_target=Round(F('capacity')*(value/100), output_field=IntegerField()))
-                        elif field['id'] == 'AR-Outbound%':
-                            Channels.objects.all().update(ar_out_target=value)
-                        elif field['id'] == 'AR-Inbound%':
-                            Channels.objects.all().update(ar_in_target=value)
-                        elif field['id'] == 'AR-MaxCost%':
-                            Channels.objects.all().update(ar_max_cost=value)
-                        elif field['id'] == 'MX-Percent':
-                            Channels.objects.all().update(maxhtlc_percent=value)
-                        elif field['id'] == 'EP-DefaultTarget':
-                            Channels.objects.all().update(ep_target=value)
-                        elif field['id'] == 'EP-IncreasePct':
-                            Channels.objects.all().update(ep_inc_pct=value)
-                        elif field['id'] == 'EP-Cooldown':
-                            Channels.objects.all().update(ep_cooldown=value)
-                        elif field['id'] == 'EP-LiveThreshold':
-                            Channels.objects.all().update(ep_live_threshold=value)
-                        elif field['id'] == 'EP-LiveIncreasePct':
-                            Channels.objects.all().update(ep_live_inc_pct=value)
-                        elif field['id'] == 'EP-Enabled':
-                            Channels.objects.all().update(ep_enabled=bool(value))
-                        elif field['id'] == 'FLP-Enabled':
-                            Channels.objects.all().update(flp_enabled=bool(value))
-                        elif field['id'] == 'FLP-Safety':
-                            Channels.objects.all().update(flp_safety=value)
-                        messages.success(request, 'All channels ' + field['id'] + ' updated to: ' + str(value))
-                    else:
-                        messages.success(request, field['id'] + ' updated to: ' + str(value))
+                if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%','MX-Percent','EP-DefaultTarget','EP-IncreasePct','EP-Cooldown','EP-LiveThreshold','EP-LiveIncreasePct','EP-Enabled','FLP-Enabled','FLP-Safety'] and value is not None:
+                    if field['id'] == 'AR-Target%':
+                        channel_updates['ar_amt_target'] = Round(F('capacity')*(value/100), output_field=IntegerField())
+                    elif field['id'] == 'AR-Outbound%':
+                        channel_updates['ar_out_target'] = value
+                    elif field['id'] == 'AR-Inbound%':
+                        channel_updates['ar_in_target'] = value
+                    elif field['id'] == 'AR-MaxCost%':
+                        channel_updates['ar_max_cost'] = value
+                    elif field['id'] == 'MX-Percent':
+                        channel_updates['maxhtlc_percent'] = value
+                    elif field['id'] == 'EP-DefaultTarget':
+                        channel_updates['ep_target'] = value
+                    elif field['id'] == 'EP-IncreasePct':
+                        channel_updates['ep_inc_pct'] = value
+                    elif field['id'] == 'EP-Cooldown':
+                        channel_updates['ep_cooldown'] = value
+                    elif field['id'] == 'EP-LiveThreshold':
+                        channel_updates['ep_live_threshold'] = value
+                    elif field['id'] == 'EP-LiveIncreasePct':
+                        channel_updates['ep_live_inc_pct'] = value
+                    elif field['id'] == 'EP-Enabled':
+                        channel_updates['ep_enabled'] = bool(value)
+                    elif field['id'] == 'FLP-Enabled':
+                        channel_updates['flp_enabled'] = bool(value)
+                    elif field['id'] == 'FLP-Safety':
+                        channel_updates['flp_safety'] = value
+                    channel_messages.append(f"All channels {field['id']} updated to: {value}")
+
+            if update_channels and channel_updates:
+                Channels.objects.all().update(**channel_updates)
+                for msg in channel_messages:
+                    messages.success(request, msg)
 
     return redirect(request.META.get('HTTP_REFERER', '/'))
 
