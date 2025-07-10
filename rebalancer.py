@@ -8,7 +8,12 @@ from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps import router_pb2 as lnr
 from gui.lnd_deps import router_pb2_grpc as lnrouter
-from gui.lnd_deps.lnd_connect import lnd_connect, async_lnd_connect
+from gui.lnd_deps.lnd_connect import (
+    get_shared_channel,
+    get_shared_async_channel,
+    close_shared_channel,
+    close_shared_async_channel,
+)
 from os import environ
 from typing import List
 
@@ -250,9 +255,11 @@ async def run_rebalancer(rebalance, worker):
             rebalance.outgoing_chan_ids = str(outbound_cans).replace('\'', '')
         rebalance.start = datetime.now()
         try:
-            #Open connection with lnd via grpc
-            stub = lnrpc.LightningStub(lnd_connect())
-            routerstub = lnrouter.RouterStub(async_lnd_connect())
+            # Use shared channels for both sync and async stubs
+            channel = get_shared_channel()
+            async_channel = get_shared_async_channel()
+            stub = lnrpc.LightningStub(channel)
+            routerstub = lnrouter.RouterStub(async_channel)
             chan_ids = json.loads(rebalance.outgoing_chan_ids)
             timeout = rebalance.duration * 60
             invoice_response = stub.AddInvoice(
@@ -443,6 +450,8 @@ async def run_rebalancer(rebalance, worker):
                 rebalance.status = 400
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error while sending payment: {str(e)}")
         finally:
+            close_shared_channel()
+            close_shared_async_channel()
             rebalance.stop = datetime.now()
             await save_record(rebalance)
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : {worker} completed payment attempts for: {rebalance.payment_hash}")
