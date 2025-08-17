@@ -85,16 +85,51 @@ def update_payments(stub):
         else:
             payment.status = 3
             payment.save()
-    last_index = Payments.objects.aggregate(Max('index'))['index__max'] if Payments.objects.exists() else 0
-    payments = stub.ListPayments(ln.ListPaymentsRequest(include_incomplete=True, index_offset=last_index, max_payments=100)).payments
-    for payment in payments:
-        try:
-            new_payment = Payments(creation_date=datetime.fromtimestamp(payment.creation_date), payment_hash=payment.payment_hash, value=round(payment.value_msat/1000, 3), fee=round(payment.fee_msat/1000, 3), status=payment.status, index=payment.payment_index)
-            new_payment.save()
-        except Exception as e:
-            #Error inserting, try to update instead
-            print(f"{datetime.now().strftime('%c')} : [Data] : Error processing {new_payment}: {str(e)}")
-        update_payment(stub, payment, self_pubkey)
+    # Resume from latest timestamp like PR 404 (use creation_date_start + index_offset), page at 1000
+    latest = Payments.objects.order_by('-creation_date', '-index').first()
+    if latest:
+        start_ts = int(latest.creation_date.timestamp())
+        index_offset = Payments.objects.filter(creation_date=latest.creation_date).count()
+    else:
+        start_ts = int(datetime(2015, 1, 1).timestamp())
+        index_offset = 0
+    page_size = 1000
+    while True:
+        payments = stub.ListPayments(
+            ln.ListPaymentsRequest(
+                include_incomplete=True,
+                creation_date_start=start_ts,
+                index_offset=index_offset,
+                max_payments=page_size
+            )
+        ).payments
+        if not payments:
+            break
+        new_payments = []
+        for payment in payments:
+            try:
+                new_payments.append(
+                    Payments(
+                        creation_date=datetime.fromtimestamp(payment.creation_date),
+                        payment_hash=payment.payment_hash,
+                        value=round(payment.value_msat/1000, 3),
+                        fee=round(payment.fee_msat/1000, 3),
+                        status=payment.status,
+                        index=payment.payment_index
+                    )
+                )
+            except Exception as e:
+                print(f"{datetime.now().strftime('%c')} : [Data] : Error preparing {getattr(payment, 'payment_hash', '')}: {str(e)}")
+        if new_payments:
+            try:
+                Payments.objects.bulk_create(new_payments, ignore_conflicts=True, batch_size=1000)
+            except Exception as e:
+                print(f"{datetime.now().strftime('%c')} : [Data] : Error bulk inserting payments: {str(e)}")
+        for payment in payments:
+            update_payment(stub, payment, self_pubkey)
+        index_offset += len(payments)
+        if len(payments) < page_size:
+            break
 
 def update_payment(stub, payment, self_pubkey):
     db_payment = Payments.objects.filter(payment_hash=payment.payment_hash)[0]
