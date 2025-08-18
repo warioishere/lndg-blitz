@@ -105,28 +105,40 @@ def update_payments(stub):
         ).payments
         if not payments:
             break
+
+        # Identify which hashes on this page are truly new
+        page_hashes = [p.payment_hash for p in payments]
+        existing_hashes = set(Payments.objects.filter(payment_hash__in=page_hashes).values_list('payment_hash', flat=True))
+        new_hashes = set(page_hashes) - existing_hashes
+
         new_payments = []
         for payment in payments:
-            try:
-                new_payments.append(
-                    Payments(
-                        creation_date=datetime.fromtimestamp(payment.creation_date),
-                        payment_hash=payment.payment_hash,
-                        value=round(payment.value_msat/1000, 3),
-                        fee=round(payment.fee_msat/1000, 3),
-                        status=payment.status,
-                        index=payment.payment_index
+            if payment.payment_hash in new_hashes:
+                try:
+                    new_payments.append(
+                        Payments(
+                            creation_date=datetime.fromtimestamp(payment.creation_date),
+                            payment_hash=payment.payment_hash,
+                            value=round(payment.value_msat/1000, 3),
+                            fee=round(payment.fee_msat/1000, 3),
+                            status=payment.status,
+                            index=payment.payment_index
+                        )
                     )
-                )
-            except Exception as e:
-                print(f"{datetime.now().strftime('%c')} : [Data] : Error preparing {getattr(payment, 'payment_hash', '')}: {str(e)}")
+                except Exception as e:
+                    print(f"{datetime.now().strftime('%c')} : [Data] : Error preparing {getattr(payment, 'payment_hash', '')}: {str(e)}")
+
         if new_payments:
             try:
                 Payments.objects.bulk_create(new_payments, ignore_conflicts=True, batch_size=1000)
             except Exception as e:
                 print(f"{datetime.now().strftime('%c')} : [Data] : Error bulk inserting payments: {str(e)}")
+
+        # Enrich only new rows or still incomplete/in-flight ones
         for payment in payments:
-            update_payment(stub, payment, self_pubkey)
+            if (payment.payment_hash in new_hashes) or (payment.status in (0, 1)):
+                update_payment(stub, payment, self_pubkey)
+
         index_offset += len(payments)
         if len(payments) < page_size:
             break
