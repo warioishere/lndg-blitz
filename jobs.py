@@ -11,10 +11,10 @@ from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
 from lndg import settings
 from os import environ
 from requests import get
+from functools import lru_cache
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
 from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, Closures, Resolutions, PendingHTLCs, LocalSettings, FailedHTLCs, Autofees, InboundFeeLog, PendingChannels, HistFailedHTLC, PeerEvents
-from gui.node_cache import get_node_info_cached
 import af
 from jobs_emergency import emergency_forward_check
 
@@ -33,6 +33,20 @@ CHANNEL_UPDATE_FIELDS = [
     'ar_out_target', 'ar_max_cost', 'ar_source', 'ar_source_ppm_diff',
     'fees_updated', 'auto_fees', 'notes'
 ]
+
+_ALIAS_STUB = None
+
+
+@lru_cache(maxsize=5000)
+def _alias_for(pub_key):
+    if _ALIAS_STUB is None:
+        return ''
+    try:
+        return _ALIAS_STUB.GetNodeInfo(
+            ln.NodeInfoRequest(pub_key=pub_key, include_channels=False)
+        ).node.alias
+    except Exception:
+        return ''
 
 
 def apply_channel_defaults(ch):
@@ -75,6 +89,13 @@ def apply_channel_defaults(ch):
 
 
 def update_payments(stub):
+    global _ALIAS_STUB
+    if _ALIAS_STUB is not stub:
+        _ALIAS_STUB = stub
+        try:
+            _alias_for.cache_clear()
+        except Exception:
+            pass
     self_pubkey = stub.GetInfo(ln.GetInfoRequest()).identity_pubkey
     inflight_payments = Payments.objects.filter(status=1).order_by('index')
     for payment in inflight_payments:
@@ -163,10 +184,7 @@ def update_payment(stub, payment, self_pubkey):
                 total_hops = len(hops)
                 for hop in hops:
                     hop_count += 1
-                    try:
-                        alias = get_node_info_cached(hop.pub_key, stub).node.alias
-                    except Exception:
-                        alias = ''
+                    alias = _alias_for(hop.pub_key)
                     fee = hop.fee_msat/1000
                     if hop_count == total_hops:
                         # Add additional HTLC information in last hop alias
@@ -223,9 +241,8 @@ def update_invoice(stub, invoice, db_invoice):
                     print(f"{datetime.now().strftime('%c')} : [Data] : Unable to validate signature on invoice: {invoice.r_hash.hex()}")
                     valid = False
                 sender = records[34349339].hex() if valid == True else None
-                try:
-                    sender_alias = get_node_info_cached(sender, stub).node.alias if sender is not None else None
-                except Exception:
+                sender_alias = _alias_for(sender) if sender is not None else None
+                if sender_alias == '':
                     sender_alias = None
             else:
                 sender = None
@@ -328,10 +345,7 @@ def update_channels(stub):
                 db_channel.alias = peer_alias
         else:
             is_new = True
-            try:
-                alias = get_node_info_cached(channel.remote_pubkey, stub).node.alias
-            except Exception:
-                alias = ''
+            alias = _alias_for(channel.remote_pubkey)
             channel_point = channel.channel_point
             txid, index = channel_point.split(':')
             db_channel = Channels(
@@ -588,19 +602,13 @@ def update_peers(stub):
             db_peer.sat_recv = peer.sat_recv
             db_peer.inbound = peer.inbound
             db_peer.ping_time = round(peer.ping_time/1000)
-            try:
-                alias = get_node_info_cached(peer.pub_key, stub).node.alias
-            except Exception:
-                alias = None
+            alias = _alias_for(peer.pub_key)
             if alias and (not db_peer.alias or db_peer.alias != alias):
                 db_peer.alias = alias
             db_peer.connected = True
             peers_to_update.append(db_peer)
         else:
-            try:
-                alias = get_node_info_cached(peer.pub_key, stub).node.alias
-            except Exception:
-                alias = ''
+            alias = _alias_for(peer.pub_key)
             peers_to_create.append(Peers(pubkey=peer.pub_key, address=peer.address, sat_sent=peer.sat_sent, sat_recv=peer.sat_recv, inbound=peer.inbound, ping_time=round(peer.ping_time/1000), alias=alias, connected=True))
         peer_list.append(peer.pub_key)
     if peers_to_create:
@@ -613,10 +621,7 @@ def refresh_peer_aliases(stub):
     """Refresh aliases for peers without an alias."""
     peers = Peers.objects.filter(Q(alias__isnull=True) | Q(alias=''))
     for peer in peers:
-        try:
-            alias = get_node_info_cached(peer.pubkey, stub).node.alias
-        except Exception:
-            alias = None
+        alias = _alias_for(peer.pubkey)
         if alias:
             peer.alias = alias
             peer.save()
@@ -686,7 +691,9 @@ def reconnect_peers(stub):
                         print(f"{datetime.now().strftime('%c')} : [Data] : Inactive channel is still connected to peer, disconnecting peer {peer.alias} {inactive_peer}")
                         disconnectpeer(stub, peer)
                     try:
-                        node = get_node_info_cached(inactive_peer, stub).node
+                        node = stub.GetNodeInfo(
+                            ln.NodeInfoRequest(pub_key=inactive_peer, include_channels=False)
+                        ).node
                         host = node.addresses[0].addr
                     except Exception as e:
                         print(f"{datetime.now().strftime('%c')} : [Data] : Unable to find node info on graph, using last known value for {peer.alias} {peer.pubkey} at {peer.address}: {str(e)}")
