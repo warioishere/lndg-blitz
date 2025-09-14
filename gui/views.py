@@ -223,6 +223,51 @@ def fees(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def full_fee_adj(request):
+    if request.method == 'GET':
+        channels = Channels.objects.filter(is_open=True)
+        context = {
+            'channels': channels.order_by('alias'),
+            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
+            'graph_links': graph_links(),
+            'network_links': network_links()
+        }
+        return render(request, 'full_fee_adj.html', context)
+    elif request.method == 'POST':
+        try:
+            delta_ppm = int(request.POST.get('delta_ppm', 0))
+        except (TypeError, ValueError):
+            messages.error(request, 'Invalid PPM delta.')
+            return redirect('full-fee-adj')
+
+        selected = request.POST.getlist('channels')
+        channels = Channels.objects.filter(chan_id__in=selected) if selected else Channels.objects.filter(is_open=True)
+
+        stub = lnrpc.LightningStub(lnd_connect())
+        updated = 0
+        for ch in channels:
+            new_rate = ch.local_fee_rate + delta_ppm
+            if new_rate < 0:
+                new_rate = 0
+            channel_point = point(ch)
+            stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(
+                chan_point=channel_point,
+                base_fee_msat=ch.local_base_fee,
+                fee_rate=(new_rate/1000000),
+                time_lock_delta=ch.local_cltv
+            ))
+            old_rate = ch.local_fee_rate
+            ch.local_fee_rate = new_rate
+            ch.fees_updated = datetime.now()
+            ch.save()
+            Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting="Manual", old_value=old_rate, new_value=new_rate).save()
+            updated += 1
+        messages.success(request, f'Outbound fee rate adjusted by {delta_ppm:+d} ppm for {updated} channel(s).')
+        return redirect('full-fee-adj')
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def advanced(request):
     if request.method == 'GET':
         channels = Channels.objects.filter(is_open=True).annotate(outbound_percent=((Sum('local_balance')+Sum('pending_outbound'))*1000)/Sum('capacity'), inbound_percent=((Sum('remote_balance')+Sum('pending_inbound'))*1000)/Sum('capacity')).order_by('-is_active', 'outbound_percent')
