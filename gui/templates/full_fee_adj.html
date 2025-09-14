@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - Full-Fee Adj{% endblock %}
+{% block content %}
+{% load humanize %}
+<div class="w3-container w3-padding-small">
+  <h2>Full-Fee Adjustment</h2>
+  <form method="post">
+    {% csrf_token %}
+    <div class="w3-bar w3-border" style="margin-bottom:8px;display:flex;align-items:center;justify-content:center;">
+      <label class="w3-bar-item">ΔPPM:</label>
+      <input class="w3-bar-item" type="number" name="delta_ppm" value="0" style="width:100px;text-align:center">
+      <button class="w3-bar-item w3-button w3-green" type="submit">Apply</button>
+      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="toggleAll(true);return false;">Select All</a>
+      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="toggleAll(false);return false;">Clear</a>
+    </div>
+    <div class="w3-container w3-padding-small" style="overflow-x:auto;max-height:800px">
+      <table class="w3-table-all w3-centered w3-hoverable">
+        <tr>
+          <th></th>
+          <th>Channel ID</th>
+          <th>Peer Alias</th>
+          <th>oRate</th>
+        </tr>
+        {% for ch in channels %}
+        <tr>
+          <td><input type="checkbox" class="chanbox" name="channels" value="{{ ch.chan_id }}"></td>
+          <td title="{{ ch.funding_txid }}:{{ ch.output_index }}"><a href="/channel?={{ ch.chan_id }}" target="_blank">{{ ch.short_chan_id }}</a></td>
+          <td>{{ ch.alias }}</td>
+          <td>{{ ch.local_fee_rate }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </form>
+</div>
+<script>
+function toggleAll(val){
+  document.querySelectorAll('.chanbox').forEach(cb => cb.checked = val);
+}
+</script>
+{% endblock %}

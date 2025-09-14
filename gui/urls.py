@@ -67,6 +67,7 @@ urlpatterns = [
     path('unprofitable_channels/', views.unprofitable_channels, name='unprofitable-channels'),
     path('actions/', views.actions, name='actions'),
     path('fees/', views.fees, name='fees'),
+    path('full-fee-adj/', views.full_fee_adj, name='full-fee-adj'),
     path('amboss-fees/', views.amboss_fees, name='amboss-fees'),
     path('inbound-offset/', views.inbound_offset, name='inbound-offset'),
     path('auto-maxhtlc/', views.auto_maxhtlc, name='auto-maxhtlc'),
