@@ -6,7 +6,7 @@
   <h2>Full-Fee Adjustment</h2>
   <form method="post">
     {% csrf_token %}
-    <div class="w3-bar w3-border" style="margin-bottom:8px">
+    <div class="w3-bar w3-border" style="margin-bottom:8px;display:flex;align-items:center;justify-content:center;">
       <label class="w3-bar-item">ΔPPM:</label>
       <input class="w3-bar-item" type="number" name="delta_ppm" value="0" style="width:100px;text-align:center">
       <button class="w3-bar-item w3-button w3-green" type="submit">Apply</button>
