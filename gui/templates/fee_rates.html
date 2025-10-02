@@ -67,7 +67,7 @@
         <td>
           <form action="/update_channel/" method="post">
             {% csrf_token %}
-            <input style="text-align:center" id="target" type="number" min="-100000" max="0" name="target" value="{{ channel.local_inbound_fee_rate }}">
+            <input style="text-align:center" id="target" type="number" min="-100000" max="100000" name="target" value="{{ channel.local_inbound_fee_rate }}">
             <input type="hidden" name="chan_id" value="{{ channel.chan_id }}">
             <input type="hidden" name="update_target" value="13">
           </form>
