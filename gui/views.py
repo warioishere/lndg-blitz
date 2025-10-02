@@ -2243,20 +2243,21 @@ def inbound_offset(request):
                 if float(version[:4]) >= 0.18:
                     channel_point = point(db_channel)
                     inbound_base_fee = db_channel.local_inbound_base_fee if db_channel.local_inbound_base_fee else 0
+                    target_fee_rate = int(round(target))
                     stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(
                         chan_point=channel_point,
                         base_fee_msat=db_channel.local_base_fee,
                         fee_rate=(db_channel.local_fee_rate/1000000),
                         time_lock_delta=db_channel.local_cltv,
-                        inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target)
+                        inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target_fee_rate)
                     ))
                     old_rate = db_channel.local_inbound_fee_rate if db_channel.local_inbound_fee_rate else 0
-                    db_channel.local_inbound_fee_rate = target
+                    db_channel.local_inbound_fee_rate = target_fee_rate
                     db_channel.offset_updated = datetime.now()
                     db_channel.save()
                     InboundFeeLog(chan_id=db_channel.chan_id, peer_alias=db_channel.alias,
-                                  setting='Manual Offset', old_value=old_rate, new_value=target).save()
-                    messages.success(request, f'Inbound fee rate for channel {db_channel.alias} ({db_channel.chan_id}) updated to a value of: {target}')
+                                  setting='Manual Offset', old_value=old_rate, new_value=target_fee_rate).save()
+                    messages.success(request, f'Inbound fee rate for channel {db_channel.alias} ({db_channel.chan_id}) updated to a value of: {target_fee_rate}')
                 else:
                     messages.error(request, 'LND version too low to set inbound fees, update to v0.18+')
             except Exception as e:
@@ -2781,10 +2782,11 @@ def update_channel(request):
                 if float(version[:4]) >= 0.18:
                     channel_point = point(db_channel)
                     inbound_fee_rate = db_channel.local_inbound_fee_rate if db_channel.local_inbound_fee_rate else 0
-                    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=db_channel.local_cltv, inbound_fee=ln.InboundFee(base_fee_msat=target, fee_rate_ppm=inbound_fee_rate)))
-                    db_channel.local_inbound_base_fee = target
+                    target_base_fee = int(round(target))
+                    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=db_channel.local_cltv, inbound_fee=ln.InboundFee(base_fee_msat=target_base_fee, fee_rate_ppm=inbound_fee_rate)))
+                    db_channel.local_inbound_base_fee = target_base_fee
                     db_channel.save()
-                    messages.success(request, 'Inbound base fee for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target))
+                    messages.success(request, 'Inbound base fee for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target_base_fee))
                 else:
                     messages.error(request, f'LND version too low to set inbound fees, update to v0.18+')
             elif update_target == 13:
@@ -2793,10 +2795,11 @@ def update_channel(request):
                 if float(version[:4]) >= 0.18:
                     channel_point = point(db_channel)
                     inbound_base_fee = db_channel.local_inbound_base_fee if db_channel.local_inbound_base_fee else 0
-                    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=db_channel.local_cltv, inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target)))
-                    db_channel.local_inbound_fee_rate = target
+                    target_fee_rate = int(round(target))
+                    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=db_channel.local_cltv, inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target_fee_rate)))
+                    db_channel.local_inbound_fee_rate = target_fee_rate
                     db_channel.save()
-                    messages.success(request, 'Inbound fee rate for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target))
+                    messages.success(request, 'Inbound fee rate for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target_fee_rate))
                 else:
                     messages.error(request, f'LND version too low to set inbound fees, update to v0.18+')
             elif update_target == 2:
