@@ -2,7 +2,7 @@ import django
 from django.db.models import Sum, Max
 from datetime import datetime, timedelta
 from os import environ
-from pandas import DataFrame, Series
+from pandas import DataFrame, Series, isna
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
 from gui.models import Forwards, Channels, LocalSettings, FailedHTLCs, Payments
@@ -342,13 +342,27 @@ def main(channels):
     channels_df['new_rate'] = (channels_df['new_rate'] / increment).round(0) * increment
     channels_df['new_rate'] = channels_df['new_rate'].clip(min_rate, max_rate)
     def compute_cost_floor(row):
-        if not flp_enabled_global or not row.get('flp_enabled'):
+        if not flp_enabled_global:
+            return 0
+        flp_enabled = row.get('flp_enabled', False)
+        if isna(flp_enabled):
+            flp_enabled = False
+        if not bool(flp_enabled):
             return 0
         avg_cost = row.get('avg_rebalance_cost')
-        if avg_cost is None:
+        if avg_cost is None or isna(avg_cost):
             return 0
-        safety = flp_safety_global + row.get('flp_safety', 0)
-        return max(avg_cost - safety, 0)
+        channel_safety = row.get('flp_safety', 0)
+        if isna(channel_safety):
+            channel_safety = 0
+        safety = flp_safety_global + channel_safety
+        current_rate = row.get('local_fee_rate')
+        if current_rate is None or isna(current_rate):
+            current_rate = 0
+        floor_value = max(avg_cost + safety, 0)
+        if current_rate > 0:
+            floor_value = min(floor_value, current_rate)
+        return int(round(floor_value))
 
     channels_df['cost_floor'] = (
         channels_df.apply(compute_cost_floor, axis=1)
