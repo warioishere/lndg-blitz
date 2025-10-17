@@ -370,7 +370,19 @@ def main(channels):
         .clip(upper=max_rate)
         .fillna(0)
     )
-    channels_df['new_rate'] = channels_df[['new_rate', 'cost_floor']].max(axis=1)
+    def enforce_cost_floor(row):
+        proposed = row['new_rate']
+        current = row['local_fee_rate']
+        floor = row['cost_floor']
+
+        if proposed < current:
+            if floor > current:
+                return current
+            if floor > proposed:
+                return floor
+        return proposed
+
+    channels_df['new_rate'] = channels_df.apply(enforce_cost_floor, axis=1)
     channels_df['adjustment'] = channels_df['new_rate'] - channels_df['local_fee_rate']
 
     # Compute new inbound rates
