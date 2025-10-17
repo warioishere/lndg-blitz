@@ -356,7 +356,13 @@ def main(channels):
         if isna(channel_safety):
             channel_safety = 0
         safety = flp_safety_global + channel_safety
-        return max(avg_cost - safety, 0)
+        current_rate = row.get('local_fee_rate')
+        if current_rate is None or isna(current_rate):
+            current_rate = 0
+        floor_value = max(avg_cost + safety, 0)
+        if current_rate > 0:
+            floor_value = min(floor_value, current_rate)
+        return int(round(floor_value))
 
     channels_df['cost_floor'] = (
         channels_df.apply(compute_cost_floor, axis=1)
