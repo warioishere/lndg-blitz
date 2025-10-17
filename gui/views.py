@@ -2762,10 +2762,11 @@ def update_channel(request):
             if update_target == 0:
                 stub = lnrpc.LightningStub(lnd_connect())
                 channel_point = point(db_channel)
-                stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=target, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=db_channel.local_cltv))
-                db_channel.local_base_fee = target
+                target_base_fee = int(round(target))
+                stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=target_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=db_channel.local_cltv))
+                db_channel.local_base_fee = target_base_fee
                 db_channel.save()
-                messages.success(request, 'Base fee for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target))
+                messages.success(request, 'Base fee for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target_base_fee))
             elif update_target == 1:
                 stub = lnrpc.LightningStub(lnd_connect())
                 channel_point = point(db_channel)
