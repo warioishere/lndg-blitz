@@ -37,6 +37,7 @@ def main(channels):
     increment = get_local_setting('AF-Increment', 5, int)
     multiplier = get_local_setting('AF-Multiplier', 5, int)
     failed_htlc_limit = get_local_setting('AF-FailedHTLCs', 25, int)
+    failed_htlc_boost = get_local_setting('AF-FailedHTLCBoost', 0, int)
     update_hours = get_local_setting('AF-UpdateHours', 24.0, float)
     lowliq_limit = get_local_setting('AF-LowLiqLimit', 5, int)
     excess_limit = get_local_setting('AF-ExcessLimit', 95, int)
@@ -341,6 +342,16 @@ def main(channels):
     channels_df['new_rate'] = channels_df['local_fee_rate'] + channels_df['adjustment']
     channels_df['new_rate'] = (channels_df['new_rate'] / increment).round(0) * increment
     channels_df['new_rate'] = channels_df['new_rate'].clip(min_rate, max_rate)
+    if failed_htlc_boost > 0:
+        failure_mask = (
+            (channels_df['overall_out_percent'] <= lowliq_limit)
+            & (channels_df['total_failed_out_1day'] > failed_htlc_limit)
+            & (channels_df['total_amt_routed_in_1day'] == 0)
+        )
+        if failure_mask.any():
+            channels_df.loc[failure_mask, 'new_rate'] = (
+                channels_df.loc[failure_mask, 'new_rate'] + failed_htlc_boost
+            ).clip(lower=min_rate, upper=max_rate)
     def compute_cost_floor(row):
         if not flp_enabled_global:
             return 0
