@@ -2563,6 +2563,7 @@ def get_local_settings(*prefixes):
         form.append({'unit': 'x', 'form_id': 'af_flow_scale', 'value': 1.0, 'label': 'Flow Scale', 'id': 'AF-FlowScale', 'title': 'Scale flow-based adjustments; 0 disables flow factor', 'min':0})
         form.append({'unit': 'ppm', 'form_id': 'af_maxstep', 'value': 100, 'label': 'Max Step', 'id': 'AF-MaxStep', 'title': 'Maximum change allowed per update', 'min':1})
         form.append({'unit': '', 'form_id': 'af_failedHTLCs', 'value': 25, 'label': 'AF FailedHTLCs', 'id': 'AF-FailedHTLCs', 'title': 'Failed HTLCs required since last fee update to trigger a fee increase (when chan liq% is below AR-LowLiq). Default 25', 'min':1, 'max':100})
+        form.append({'unit': 'ppm', 'form_id': 'af_failedhtlcboost', 'value': 0, 'label': 'Failed HTLC Boost', 'id': 'AF-FailedHTLCBoost', 'title': 'Additional ppm added when failed HTLC low-liquidity trigger fires. Default 0', 'min':0})
         form.append({'unit': 'hours', 'form_id': 'af_updateHours', 'value': 24, 'label': 'AF Update', 'id': 'AF-UpdateHours', 'title': 'Minimum number of hours between fee updates for an individual channel. Default 24', 'min':0.01, 'max':100})
         form.append({'unit': '%', 'form_id': 'af_lowliq', 'value': 15, 'label': 'AF LowLiq', 'id': 'AF-LowLiqLimit', 'title': 'Limit for running low liq AF rules (increase when failed htlcs + no inbound). Default 15', 'min':0, 'max':100})
         form.append({'unit': 'x', 'form_id': 'af_lowliqboost', 'value': 1, 'label': 'AF LowLiq Boost', 'id': 'AF-LowLiqBoost', 'title': 'Multiplier for extra fee bump when liquidity is below AF-LowLiqLimit. Default 1', 'min':0, 'max':10})
@@ -2642,7 +2643,8 @@ def update_settings(request):
                      {'form_id': 'af_multiplier', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-Multiplier'},
                      {'form_id': 'af_flow_scale', 'value': 1.0, 'parse': lambda x: float(x),'id': 'AF-FlowScale'},
                      {'form_id': 'af_maxstep', 'value': 100, 'parse': lambda x: int(x),'id': 'AF-MaxStep'},
-                     {'form_id': 'af_failedHTLCs', 'value': 25, 'parse': lambda x: int(x),'id': 'AF-FailedHTLCs'},
+                    {'form_id': 'af_failedHTLCs', 'value': 25, 'parse': lambda x: int(x),'id': 'AF-FailedHTLCs'},
+                    {'form_id': 'af_failedhtlcboost', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-FailedHTLCBoost'},
                     {'form_id': 'af_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'AF-UpdateHours'},
                     {'form_id': 'af_lowliq', 'value': 15, 'parse': lambda x: int(x),'id': 'AF-LowLiqLimit'},
                     {'form_id': 'af_lowliqboost', 'value': 1, 'parse': lambda x: float(x),'id': 'AF-LowLiqBoost'},
