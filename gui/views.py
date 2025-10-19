@@ -200,12 +200,12 @@ def channels(request):
                 channels_df['apy_30day'] = channels_df.apply(lambda row: round((row['profits_30day']*1216.6667)/(row['capacity']*outbound_ratio), 2), axis=1)
                 channels_df['cv_7day'] = channels_df.apply(lambda row: round((row['revenue_7day']*5214.2857)/(row['capacity']*outbound_ratio) + (row['revenue_assist_7day']*5214.2857)/(row['capacity']*(1-outbound_ratio)), 2), axis=1)
                 channels_df['cv_30day'] = channels_df.apply(lambda row: round((row['revenue_30day']*1216.6667)/(row['capacity']*outbound_ratio) + (row['revenue_assist_30day']*1216.6667)/(row['capacity']*(1-outbound_ratio)), 2), axis=1)
-            channels_df.drop(columns=['inbound_fee_out_7day', 'inbound_fee_out_30day', 'inbound_fee_in_7day', 'inbound_fee_in_30day'], inplace=True)
             else:
                 channels_df['apy_7day'] = 0.0
                 channels_df['apy_30day'] = 0.0
                 channels_df['cv_7day'] = 0.0
                 channels_df['cv_30day'] = 0.0
+            channels_df.drop(columns=['inbound_fee_out_7day', 'inbound_fee_out_30day', 'inbound_fee_in_7day', 'inbound_fee_in_30day'], inplace=True)
         else:
             apy_7day = 0
             apy_30day = 0
