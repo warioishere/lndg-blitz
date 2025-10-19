@@ -128,6 +128,14 @@ def channels(request):
             forwards_df_out_30d_sum = DataFrame() if forwards_df_30d.empty else forwards_df_30d.groupby('chan_id_out', as_index=True).sum(numeric_only=True)
             forwards_df_in_7d_sum = DataFrame() if forwards_df_7d.empty else forwards_df_7d.groupby('chan_id_in', as_index=True).sum(numeric_only=True)
             forwards_df_out_7d_sum = DataFrame() if forwards_df_7d.empty else forwards_df_7d.groupby('chan_id_out', as_index=True).sum(numeric_only=True)
+            if forwards_df_out_7d_sum.empty == False and 'inbound_fee' in forwards_df_out_7d_sum:
+                forwards_df_out_7d_sum['inbound_fee'] = forwards_df_out_7d_sum['inbound_fee'].fillna(0)
+            if forwards_df_out_30d_sum.empty == False and 'inbound_fee' in forwards_df_out_30d_sum:
+                forwards_df_out_30d_sum['inbound_fee'] = forwards_df_out_30d_sum['inbound_fee'].fillna(0)
+            if forwards_df_in_7d_sum.empty == False and 'inbound_fee' in forwards_df_in_7d_sum:
+                forwards_df_in_7d_sum['inbound_fee'] = forwards_df_in_7d_sum['inbound_fee'].fillna(0)
+            if forwards_df_in_30d_sum.empty == False and 'inbound_fee' in forwards_df_in_30d_sum:
+                forwards_df_in_30d_sum['inbound_fee'] = forwards_df_in_30d_sum['inbound_fee'].fillna(0)
             forwards_df_in_30d_count = DataFrame() if forwards_df_30d.empty else forwards_df_30d.groupby('chan_id_in', as_index=True).count()
             forwards_df_out_30d_count = DataFrame() if forwards_df_30d.empty else forwards_df_30d.groupby('chan_id_out', as_index=True).count()
             forwards_df_in_7d_count = DataFrame() if forwards_df_7d.empty else forwards_df_7d.groupby('chan_id_in', as_index=True).count()
@@ -165,12 +173,18 @@ def channels(request):
             channels_df['rebal_out_7day'] = channels_df.apply(lambda row: payments_df_7d_count.loc[row.chan_id].value if payments_df_7d_count.empty == False and (payments_df_7d_count.index == row.chan_id).any() else 0, axis=1)
             channels_df['amt_rebal_in_7day'] = channels_df.apply(lambda row: int(invoices_df_7d_sum.loc[row.chan_id].amt_paid/100000)/10 if invoices_df_7d_count.empty == False and (invoices_df_7d_sum.index == row.chan_id).any() else 0, axis=1)
             channels_df['amt_rebal_out_7day'] = channels_df.apply(lambda row: int(payments_df_7d_sum.loc[row.chan_id].value/100000)/10 if payments_df_7d_count.empty == False and (payments_df_7d_sum.index == row.chan_id).any() else 0, axis=1)
-            channels_df['revenue_7day'] = channels_df.apply(lambda row: int(forwards_df_out_7d_sum.loc[row.chan_id].fee) if forwards_df_out_7d_sum.empty == False and (forwards_df_out_7d_sum.index == row.chan_id).any() else 0, axis=1)
-            channels_df['revenue_30day'] = channels_df.apply(lambda row: int(forwards_df_out_30d_sum.loc[row.chan_id].fee) if forwards_df_out_30d_sum.empty == False and (forwards_df_out_30d_sum.index == row.chan_id).any() else 0, axis=1)
-            channels_df['revenue_assist_7day'] = channels_df.apply(lambda row: int(forwards_df_in_7d_sum.loc[row.chan_id].fee) if forwards_df_in_7d_sum.empty == False and (forwards_df_in_7d_sum.index == row.chan_id).any() else 0, axis=1)
-            channels_df['revenue_assist_30day'] = channels_df.apply(lambda row: int(forwards_df_in_30d_sum.loc[row.chan_id].fee) if forwards_df_in_30d_sum.empty == False and (forwards_df_in_30d_sum.index == row.chan_id).any() else 0, axis=1)
+            channels_df['inbound_fee_out_7day'] = channels_df.apply(lambda row: int(forwards_df_out_7d_sum.loc[row.chan_id].inbound_fee) if forwards_df_out_7d_sum.empty == False and 'inbound_fee' in forwards_df_out_7d_sum and (forwards_df_out_7d_sum.index == row.chan_id).any() else 0, axis=1)
+            channels_df['inbound_fee_out_30day'] = channels_df.apply(lambda row: int(forwards_df_out_30d_sum.loc[row.chan_id].inbound_fee) if forwards_df_out_30d_sum.empty == False and 'inbound_fee' in forwards_df_out_30d_sum and (forwards_df_out_30d_sum.index == row.chan_id).any() else 0, axis=1)
+            channels_df['inbound_fee_in_7day'] = channels_df.apply(lambda row: int(forwards_df_in_7d_sum.loc[row.chan_id].inbound_fee) if forwards_df_in_7d_sum.empty == False and 'inbound_fee' in forwards_df_in_7d_sum and (forwards_df_in_7d_sum.index == row.chan_id).any() else 0, axis=1)
+            channels_df['inbound_fee_in_30day'] = channels_df.apply(lambda row: int(forwards_df_in_30d_sum.loc[row.chan_id].inbound_fee) if forwards_df_in_30d_sum.empty == False and 'inbound_fee' in forwards_df_in_30d_sum and (forwards_df_in_30d_sum.index == row.chan_id).any() else 0, axis=1)
+            channels_df['revenue_7day'] = channels_df.apply(lambda row: (int(forwards_df_out_7d_sum.loc[row.chan_id].fee) + row['inbound_fee_out_7day']) if forwards_df_out_7d_sum.empty == False and (forwards_df_out_7d_sum.index == row.chan_id).any() else 0, axis=1)
+            channels_df['revenue_30day'] = channels_df.apply(lambda row: (int(forwards_df_out_30d_sum.loc[row.chan_id].fee) + row['inbound_fee_out_30day']) if forwards_df_out_30d_sum.empty == False and (forwards_df_out_30d_sum.index == row.chan_id).any() else 0, axis=1)
+            channels_df['revenue_assist_7day'] = channels_df.apply(lambda row: (int(forwards_df_in_7d_sum.loc[row.chan_id].fee) - row['inbound_fee_in_7day']) if forwards_df_in_7d_sum.empty == False and (forwards_df_in_7d_sum.index == row.chan_id).any() else 0, axis=1)
+            channels_df['revenue_assist_30day'] = channels_df.apply(lambda row: (int(forwards_df_in_30d_sum.loc[row.chan_id].fee) - row['inbound_fee_in_30day']) if forwards_df_in_30d_sum.empty == False and (forwards_df_in_30d_sum.index == row.chan_id).any() else 0, axis=1)
             channels_df['costs_7day'] = channels_df.apply(lambda row: 0 if row['rebal_in_7day'] == 0 else int(payments_df_7d.set_index('payment_hash', inplace=False).loc[invoice_hashes_7d[row.chan_id] if invoice_hashes_7d.empty == False and (invoice_hashes_7d.index == row.chan_id).any() else []]['fee'].sum()), axis=1)
             channels_df['costs_30day'] = channels_df.apply(lambda row: 0 if row['rebal_in_30day'] == 0 else int(payments_df_30d.set_index('payment_hash', inplace=False).loc[invoice_hashes_30d[row.chan_id] if invoice_hashes_30d.empty == False and (invoice_hashes_30d.index == row.chan_id).any() else []]['fee'].sum()), axis=1)
+            channels_df['costs_7day'] = channels_df['costs_7day'] + channels_df['inbound_fee_in_7day']
+            channels_df['costs_30day'] = channels_df['costs_30day'] + channels_df['inbound_fee_in_30day']
             channels_df['profits_7day'] = channels_df.apply(lambda row: row['revenue_7day'] - row['costs_7day'], axis=1)
             channels_df['profits_30day'] = channels_df.apply(lambda row: row['revenue_30day'] - row['costs_30day'], axis=1)
             channels_df['open_block'] = channels_df.apply(lambda row: int(row.chan_id)>>40, axis=1)
@@ -191,6 +205,7 @@ def channels(request):
                 channels_df['apy_30day'] = 0.0
                 channels_df['cv_7day'] = 0.0
                 channels_df['cv_30day'] = 0.0
+            channels_df.drop(columns=['inbound_fee_out_7day', 'inbound_fee_out_30day', 'inbound_fee_in_7day', 'inbound_fee_in_30day'], inplace=True)
         else:
             apy_7day = 0
             apy_30day = 0
