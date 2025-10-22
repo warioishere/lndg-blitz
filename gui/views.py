@@ -256,11 +256,16 @@ def full_fee_adj(request):
             return redirect('full-fee-adj')
 
         selected = request.POST.getlist('channels')
-        channels = Channels.objects.filter(chan_id__in=selected) if selected else Channels.objects.filter(is_open=True)
+        queryset = Channels.objects.filter(chan_id__in=selected) if selected else Channels.objects.filter(is_open=True)
+        channels = list(queryset)
 
         stub = lnrpc.LightningStub(lnd_connect())
         updated = 0
+        processed = set()
         for ch in channels:
+            if ch.chan_id in processed:
+                continue
+            processed.add(ch.chan_id)
             new_rate = ch.local_fee_rate + delta_ppm
             if new_rate < 0:
                 new_rate = 0
@@ -276,7 +281,9 @@ def full_fee_adj(request):
             ch.fees_updated = datetime.now()
             ch.save()
             Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting="Manual", old_value=old_rate, new_value=new_rate).save()
-            updated += 1
+            processed_siblings, updated_siblings = sync_peer_outbound_fee(ch, new_rate, stub=stub)
+            processed.update(processed_siblings)
+            updated += 1 + len(updated_siblings)
         messages.success(request, f'Outbound fee rate adjusted by {delta_ppm:+d} ppm for {updated} channel(s).')
         return redirect('full-fee-adj')
     else:
@@ -2793,6 +2800,9 @@ def update_channel(request):
                 db_channel.fees_updated = datetime.now()
                 db_channel.save()
                 Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Manual"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
+                _, updated_siblings = sync_peer_outbound_fee(db_channel, target, stub=stub)
+                if updated_siblings:
+                    messages.info(request, f'Synced outbound fee with {len(updated_siblings)} sibling channel(s).')
                 messages.success(request, 'Fee rate for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target))
             elif update_target == 12:
                 stub = lnrpc.LightningStub(lnd_connect())
@@ -2984,6 +2994,52 @@ def point(ch: Channels):
     channel_point.output_index = ch.output_index
     return channel_point
 
+
+def sync_peer_outbound_fee(channel: Channels, new_rate: int, stub=None):
+    """Mirror a manual outbound fee change across channels for the same peer."""
+
+    siblings = Channels.objects.filter(
+        remote_pubkey=channel.remote_pubkey,
+        is_open=True,
+    ).exclude(chan_id=channel.chan_id)
+
+    processed = set()
+    updated = set()
+
+    if not siblings:
+        return processed, updated
+
+    client = stub or lnrpc.LightningStub(lnd_connect())
+
+    for sibling in siblings:
+        processed.add(sibling.chan_id)
+        if sibling.local_fee_rate == new_rate:
+            continue
+
+        channel_point = point(sibling)
+        client.UpdateChannelPolicy(
+            ln.PolicyUpdateRequest(
+                chan_point=channel_point,
+                base_fee_msat=sibling.local_base_fee,
+                fee_rate=(new_rate / 1000000),
+                time_lock_delta=sibling.local_cltv,
+            )
+        )
+        old_rate = sibling.local_fee_rate
+        sibling.local_fee_rate = new_rate
+        sibling.fees_updated = datetime.now()
+        sibling.save()
+        Autofees(
+            chan_id=sibling.chan_id,
+            peer_alias=sibling.alias,
+            setting="Manual",
+            old_value=old_rate,
+            new_value=new_rate,
+        ).save()
+        updated.add(sibling.chan_id)
+
+    return processed, updated
+
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def update_setting(request):
     if request.method == 'POST':
@@ -2994,8 +3050,13 @@ def update_setting(request):
             if key == 'ALL-oRate':
                 target = int(value)
                 stub = lnrpc.LightningStub(lnd_connect())
-                channels = Channels.objects.filter(is_open=True)
+                channels = list(Channels.objects.filter(is_open=True))
+                processed = set()
+                total_synced = 0
                 for db_channel in channels:
+                    if db_channel.chan_id in processed:
+                        continue
+                    processed.add(db_channel.chan_id)
                     channel_point = point(db_channel)
                     stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(target/1000000), time_lock_delta=db_channel.local_cltv))
                     old_fee_rate = db_channel.local_fee_rate
@@ -3003,6 +3064,11 @@ def update_setting(request):
                     db_channel.fees_updated = datetime.now()
                     db_channel.save()
                     Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Manual"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
+                    processed_siblings, updated_siblings = sync_peer_outbound_fee(db_channel, target, stub=stub)
+                    processed.update(processed_siblings)
+                    total_synced += len(updated_siblings)
+                if total_synced:
+                    messages.info(request, f'Synced outbound fee with {total_synced} sibling channel(s).')
                 messages.success(request, 'Fee rate for all open channels updated to a value of: ' + str(target))
             elif key == 'ALL-oBase':
                 target = int(value)
@@ -4112,11 +4178,15 @@ def chan_policy(request):
                     return_response['base_fee'] = serializer.validated_data['base_fee']
                 if serializer.validated_data['fee_rate'] is not None:
                     old_fee_rate = db_channel.local_fee_rate
-                    db_channel.local_fee_rate = serializer.validated_data['fee_rate']
+                    new_rate = serializer.validated_data['fee_rate']
+                    db_channel.local_fee_rate = new_rate
                     db_channel.fees_updated = datetime.now()
                     db_channel.save()
-                    return_response['fee_rate'] = serializer.validated_data['fee_rate']
+                    return_response['fee_rate'] = new_rate
                     Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Manual"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
+                    _, updated_siblings = sync_peer_outbound_fee(db_channel, new_rate, stub=stub)
+                    if updated_siblings:
+                        return_response['synced_siblings'] = len(updated_siblings)
                 if serializer.validated_data['inbound_base_fee'] is not None:
                     db_channel.local_inbound_base_fee = serializer.validated_data['inbound_base_fee']
                     db_channel.save()
