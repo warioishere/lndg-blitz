@@ -3,6 +3,8 @@ from django.db.models import Sum, Max
 from datetime import datetime, timedelta
 from os import environ
 from pandas import DataFrame, Series, isna
+
+from peer_fee_sync import mirror_peer_fee_targets
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
 from gui.models import Forwards, Channels, LocalSettings, FailedHTLCs, Payments
@@ -404,6 +406,9 @@ def main(channels):
     channels_df['new_inbound_rate'] = (channels_df['new_inbound_rate'] / increment).round(0) * increment
     channels_df['new_inbound_rate'] = channels_df['new_inbound_rate'].clip(-((channels_df['ar_max_cost']/100)*channels_df['local_fee_rate']), 0)
     channels_df['inbound_adjustment'] = channels_df['new_inbound_rate'] - channels_df['local_inbound_fee_rate']
+
+    # Mirror fee targets across multi-channel peers
+    channels_df = mirror_peer_fee_targets(channels_df)
 
     # Return results
     return channels_df
