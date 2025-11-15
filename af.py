@@ -302,6 +302,9 @@ def main(channels):
             ) else 0
             return clamp_step(adj)
         elif row['overall_out_percent'] >= excess_limit:
+            # Don't reduce fees if peer's inbound fee rate is positive
+            if row.get('remote_inbound_fee_rate', 0) > 0:
+                return 0
             adj = -1
             if excess_boost_enabled:
                 adj = int(adj * excess_boost)
