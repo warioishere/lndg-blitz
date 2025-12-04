@@ -39,11 +39,10 @@ def main(channels):
     increment = get_local_setting('AF-Increment', 5, int)
     multiplier = get_local_setting('AF-Multiplier', 5, int)
     failed_htlc_limit = get_local_setting('AF-FailedHTLCs', 25, int)
-    failed_htlc_boost = get_local_setting('AF-FailedHTLCBoost', 0, int)
-    # New failed HTLC boost settings
+    # Failed HTLC boost settings (independent mechanism)
     failed_htlc_boost_interval = get_local_setting('AF-HTLCBoostIntvl', 15, int)  # in minutes
     failed_htlc_boost_threshold = get_local_setting('AF-HTLCBoostThresh', 5, int)  # count
-    failed_htlc_boost_amount = get_local_setting('AF-HTLCBoostAmount', 0, int)  # ppm
+    failed_htlc_boost_amount = get_local_setting('AF-FailedHTLCBoost', 0, int)  # ppm
     update_hours = get_local_setting('AF-UpdateHours', 24.0, float)
     lowliq_limit = get_local_setting('AF-LowLiqLimit', 5, int)
     excess_limit = get_local_setting('AF-ExcessLimit', 95, int)
