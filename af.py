@@ -38,10 +38,6 @@ def main(channels):
     min_rate = get_local_setting('AF-MinRate', 0, int)
     increment = get_local_setting('AF-Increment', 5, int)
     multiplier = get_local_setting('AF-Multiplier', 5, int)
-    # Failed HTLC boost settings (independent mechanism)
-    failed_htlc_boost_interval = get_local_setting('AF-HTLCBoostIntvl', 15, int)  # in minutes
-    failed_htlc_boost_threshold = get_local_setting('AF-FailedHTLCs', 5, int)  # count
-    failed_htlc_boost_amount = get_local_setting('AF-FailedHTLCBoost', 0, int)  # ppm
     update_hours = get_local_setting('AF-UpdateHours', 24.0, float)
     lowliq_limit = get_local_setting('AF-LowLiqLimit', 5, int)
     excess_limit = get_local_setting('AF-ExcessLimit', 95, int)
@@ -164,20 +160,6 @@ def main(channels):
         failed_out_1day_series = Series(dtype='int64')
     channels_df['failed_out_1day'] = channels_df['chan_id'].map(failed_out_1day_series).fillna(0).astype(int)
 
-    # Compute failed HTLCs per channel for new boost mechanism (separate interval)
-    filter_boost_interval = datetime.now() - timedelta(minutes=failed_htlc_boost_interval)
-    failed_htlc_boost_df = DataFrame.from_records(
-        FailedHTLCs.objects.filter(timestamp__gte=filter_boost_interval, wire_failure=15, failure_detail=6).values()
-    )
-    if not failed_htlc_boost_df.empty:
-        failed_htlc_boost_df = failed_htlc_boost_df[
-            failed_htlc_boost_df['amount'] > (failed_htlc_boost_df['chan_out_liq'] + failed_htlc_boost_df['chan_out_pending'])
-        ]
-        failed_out_boost_series = failed_htlc_boost_df['chan_id_out'].value_counts()
-    else:
-        failed_out_boost_series = Series(dtype='int64')
-    channels_df['failed_out_boost_interval'] = channels_df['chan_id'].map(failed_out_boost_series).fillna(0).astype(int)
-
     # Compute revenue metrics
     if not forwards_df_in_7d_sum.empty:
         channels_df['revenue_assist_7day'] = channels_df['chan_id'].map(
@@ -290,12 +272,6 @@ def main(channels):
 
     # Define outbound adjustment calculation function (per channel)
     def compute_outbound_adjustment(row):
-        # Check new failed HTLC boost mechanism first
-        if (failed_htlc_boost_amount > 0
-            and row['out_percent'] <= lowliq_limit
-            and row.get('failed_out_boost_interval', 0) >= failed_htlc_boost_threshold):
-            return failed_htlc_boost_amount
-
         if row['out_percent'] <= lowliq_limit:
             if peer_rate_check and peer_rate_limit > 0 and row['remote_fee_rate'] >= peer_rate_limit:
                 return 0

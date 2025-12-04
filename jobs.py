@@ -874,6 +874,111 @@ def emergency_fee_job(stub):
                     print(f"{datetime.now().strftime('%c')} : [Data] : Error updating emergency fee for {ch.chan_id}: {str(e)}")
 
 
+def failed_htlc_boost_job(stub):
+    """
+    Independent failed HTLC boost mechanism.
+    Monitors failed HTLCs over a configurable interval and applies a fixed fee boost
+    when threshold is met for channels below liquidity limit.
+    Respects the configured interval - only checks/applies once per interval window.
+    """
+    # Get settings with defaults
+    try:
+        boost_interval = int(LocalSettings.objects.filter(key='AF-HTLCBoostIntvl').first().value) if LocalSettings.objects.filter(key='AF-HTLCBoostIntvl').exists() else 15
+    except:
+        boost_interval = 15
+
+    try:
+        boost_threshold = int(LocalSettings.objects.filter(key='AF-FailedHTLCs').first().value) if LocalSettings.objects.filter(key='AF-FailedHTLCs').exists() else 5
+    except:
+        boost_threshold = 5
+
+    try:
+        boost_amount = int(LocalSettings.objects.filter(key='AF-FailedHTLCBoost').first().value) if LocalSettings.objects.filter(key='AF-FailedHTLCBoost').exists() else 0
+    except:
+        boost_amount = 0
+
+    try:
+        lowliq_limit = int(LocalSettings.objects.filter(key='AF-LowLiqLimit').first().value) if LocalSettings.objects.filter(key='AF-LowLiqLimit').exists() else 5
+    except:
+        lowliq_limit = 5
+
+    # If boost disabled, skip
+    if boost_amount <= 0:
+        return
+
+    # Calculate lookback window for failed HTLC counting
+    filter_boost_interval = datetime.now() - timedelta(minutes=boost_interval)
+
+    # Get channels below liquidity limit
+    channels = Channels.objects.filter(is_open=True)
+
+    for ch in channels:
+        # Calculate liquidity percentage
+        local_percent = (ch.local_balance + ch.pending_outbound) * 100 / ch.capacity if ch.capacity else 0
+
+        # Only process channels below liquidity limit
+        if local_percent > lowliq_limit:
+            continue
+
+        # Check if we've already applied boost recently (within the interval)
+        # Only apply boost once per interval window
+        threshold_time = datetime.now() - timedelta(minutes=boost_interval)
+        last_boost_applied = Autofees.objects.filter(
+            chan_id=ch.chan_id,
+            setting='HTLC Boost Job',
+            timestamp__gte=threshold_time
+        ).exists()
+
+        # If boost already applied in this interval, skip
+        if last_boost_applied:
+            continue
+
+        # Count failed HTLCs in the interval for this channel's outbound
+        failed_htlc_count = FailedHTLCs.objects.filter(
+            chan_id_out=ch.chan_id,
+            timestamp__gte=filter_boost_interval,
+            wire_failure=15,
+            failure_detail=6
+        ).filter(
+            Q(amount__gt=0)
+        ).count()
+
+        # If threshold met, apply boost
+        if failed_htlc_count >= boost_threshold:
+            new_rate = ch.local_fee_rate + boost_amount
+            channel_point = ln.ChannelPoint()
+            channel_point.funding_txid_bytes = bytes.fromhex(ch.funding_txid)
+            channel_point.funding_txid_str = ch.funding_txid
+            channel_point.output_index = ch.output_index
+            inbound_base_fee = ch.local_inbound_base_fee if ch.local_inbound_base_fee else 0
+
+            try:
+                stub.UpdateChannelPolicy(
+                    ln.PolicyUpdateRequest(
+                        chan_point=channel_point,
+                        base_fee_msat=ch.local_base_fee,
+                        fee_rate=(new_rate / 1_000_000),
+                        time_lock_delta=ch.local_cltv,
+                        inbound_fee=ln.InboundFee(
+                            base_fee_msat=inbound_base_fee,
+                            fee_rate_ppm=ch.local_inbound_fee_rate if ch.local_inbound_fee_rate else 0
+                        )
+                    )
+                )
+                print(f"{datetime.now().strftime('%c')} : [Data] : Applied HTLC boost to {ch.chan_id}: {failed_htlc_count} HTLCs >= {boost_threshold} threshold, +{boost_amount} ppm")
+
+                # Log the change
+                Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting='HTLC Boost Job', old_value=ch.local_fee_rate, new_value=new_rate).save()
+
+                # Update channel
+                ch.local_fee_rate = new_rate
+                ch.fees_updated = datetime.now()
+                ch.save()
+            except Exception as e:
+                print(f"{datetime.now().strftime('%c')} : [Data] : Error applying HTLC boost to {ch.chan_id}: {str(e)}")
+                continue
+
+
 def agg_htlcs(target_htlcs, category):
     try:
         target_ids = target_htlcs.values_list('id')
@@ -931,6 +1036,7 @@ def main():
             auto_fees(stub)
             inbound_offsets(stub)
             auto_maxhtlc_job(stub)
+            failed_htlc_boost_job(stub)
             agg_failed_htlcs()
         except Exception as e:
             print(f"{datetime.now().strftime('%c')} : [Data] : Error processing background data: {str(e)}")
