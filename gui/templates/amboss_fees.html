@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %} {{ block.super }} - Amboss Fees{% endblock %}
-{% load static %}
-<script src="{% static 'charts.js' %}"></script>
 {% block content %}
+{% load static %}
 {% load humanize dict_extras %}
+<script src="{% static 'charts.js' %}"></script>
 <div class="w3-container w3-padding-small">
   <h2>Amboss Fee Data</h2>
   <form method="get" style="margin-bottom:10px;">
