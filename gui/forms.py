@@ -61,7 +61,6 @@ class AutoFeesForm(AutoRebalanceForm):
     af_multiplier = forms.IntegerField(label='af_multiplier', required=False)
     af_flow_scale = forms.FloatField(label='af_flow_scale', required=False)
     af_maxstep = forms.IntegerField(label='af_maxstep', required=False)
-    af_failedHTLCs = forms.IntegerField(label='af_failedHTLCs', required=False)
     af_failedhtlcboost = forms.IntegerField(label='af_failedhtlcboost', required=False)
     af_failedhtlcboost_interval = forms.IntegerField(label='af_failedhtlcboost_interval', required=False)
     af_failedhtlcboost_threshold = forms.IntegerField(label='af_failedhtlcboost_threshold', required=False)

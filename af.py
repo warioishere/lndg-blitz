@@ -38,10 +38,9 @@ def main(channels):
     min_rate = get_local_setting('AF-MinRate', 0, int)
     increment = get_local_setting('AF-Increment', 5, int)
     multiplier = get_local_setting('AF-Multiplier', 5, int)
-    failed_htlc_limit = get_local_setting('AF-FailedHTLCs', 25, int)
     # Failed HTLC boost settings (independent mechanism)
     failed_htlc_boost_interval = get_local_setting('AF-HTLCBoostIntvl', 15, int)  # in minutes
-    failed_htlc_boost_threshold = get_local_setting('AF-HTLCBoostThresh', 5, int)  # count
+    failed_htlc_boost_threshold = get_local_setting('AF-FailedHTLCs', 5, int)  # count
     failed_htlc_boost_amount = get_local_setting('AF-FailedHTLCBoost', 0, int)  # ppm
     update_hours = get_local_setting('AF-UpdateHours', 24.0, float)
     lowliq_limit = get_local_setting('AF-LowLiqLimit', 5, int)
@@ -252,10 +251,7 @@ def main(channels):
 
     def compute_inbound_adjustment(row):
         if row['overall_out_percent'] <= lowliq_limit:
-            adj = (-12 * multiplier) if (
-                row['total_failed_out_1day'] > failed_htlc_limit
-                and row['total_amt_routed_in_1day'] == 0
-            ) else 0
+            adj = 0
         elif row['overall_out_percent'] < excess_limit:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
                 adj = 7 * multiplier
@@ -319,11 +315,7 @@ def main(channels):
                 return clamp_step(-2)
 
         if row['overall_out_percent'] <= lowliq_limit:
-            adj = (5 * multiplier) if (
-                row['total_failed_out_1day'] > failed_htlc_limit
-                and row['total_amt_routed_in_1day'] == 0
-            ) else 0
-            return clamp_step(adj)
+            return 0
         elif row['overall_out_percent'] >= excess_limit:
             # Don't reduce fees if peer's inbound fee rate is positive
             if row.get('remote_inbound_fee_rate', 0) > 0:
