@@ -158,7 +158,7 @@ function renderFeeHistoryChart(data) {
 
   // Format timestamps
   const labels = data.labels.map(ts => {
-    const date = new Date(parseInt(ts) * 1000);
+    const date = new Date(ts);
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
   });
 
