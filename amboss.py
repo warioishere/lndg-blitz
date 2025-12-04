@@ -75,34 +75,64 @@ def fetch_amboss_data(pubkey, api_key, time_range="TODAY", timeout=10):
 
 def fetch_channel_fee_history(channel_id, api_key, time_period="1w", timeout=10):
     """Fetch fee history for a specific channel from Amboss API."""
+    from datetime import datetime, timedelta
+
     amboss_url = "https://api.amboss.space/graphql"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
+    # Calculate 'from' timestamp based on time_period
+    now = datetime.utcnow()
+    if time_period == "1d":
+        from_date = now - timedelta(days=1)
+    elif time_period == "1m":
+        from_date = now - timedelta(days=30)
+    else:  # default to 1w
+        from_date = now - timedelta(days=7)
+
+    from_timestamp = from_date.isoformat() + "Z"
+
     query = """
-        query ChannelFeeInfo($channel_id: String!, $time_period: String!) {
-            getChannel(id: $channel_id) {
-                id
+        query GetEdgePolicy($id: String!, $from: String) {
+            getEdge(id: $id) {
                 short_channel_id
-                fee_history(time_period: $time_period) {
-                    timestamp
-                    fee_rate_milli_msat
+                graph {
+                    policy_history(from: $from) {
+                        node1 {
+                            list {
+                                updated_at
+                                fee_base_msat
+                                fee_rate_milli_msat
+                                max_htlc
+                                min_htlc
+                            }
+                        }
+                        node2 {
+                            list {
+                                updated_at
+                                fee_base_msat
+                                fee_rate_milli_msat
+                                max_htlc
+                                min_htlc
+                            }
+                        }
+                    }
                 }
             }
         }
     """
 
     variables = {
-        "channel_id": str(channel_id),
-        "time_period": time_period
+        "id": str(channel_id),
+        "from": from_timestamp
     }
 
     payload = {"query": query, "variables": variables}
 
     try:
-        logging.debug(f"Fetching channel {channel_id} fee history for {time_period}")
+        logging.debug(f"Fetching channel {channel_id} fee history from {from_timestamp}")
         response = requests.post(
             amboss_url, json=payload, headers=headers, timeout=timeout
         )
@@ -116,8 +146,8 @@ def fetch_channel_fee_history(channel_id, api_key, time_period="1w", timeout=10)
             logging.error(error_msg)
             raise AmbossAPIError(error_msg)
 
-        channel_data = data.get("data", {}).get("getChannel")
-        if not channel_data:
+        edge_data = data.get("data", {}).get("getEdge")
+        if not edge_data:
             logging.warning(f"No channel data found for channel_id {channel_id}")
             return {
                 "channel_id": channel_id,
@@ -125,10 +155,37 @@ def fetch_channel_fee_history(channel_id, api_key, time_period="1w", timeout=10)
                 "fee_history": []
             }
 
+        short_channel_id = edge_data.get("short_channel_id")
+        policy_history = edge_data.get("graph", {}).get("policy_history", {})
+
+        # Combine fee history from both nodes
+        fee_history = []
+
+        # Add node1 policy history
+        node1_list = policy_history.get("node1", {}).get("list", [])
+        for item in node1_list:
+            fee_history.append({
+                "timestamp": item.get("updated_at"),
+                "fee_rate_milli_msat": item.get("fee_rate_milli_msat"),
+                "fee_base_msat": item.get("fee_base_msat")
+            })
+
+        # Add node2 policy history
+        node2_list = policy_history.get("node2", {}).get("list", [])
+        for item in node2_list:
+            fee_history.append({
+                "timestamp": item.get("updated_at"),
+                "fee_rate_milli_msat": item.get("fee_rate_milli_msat"),
+                "fee_base_msat": item.get("fee_base_msat")
+            })
+
+        # Sort by timestamp
+        fee_history.sort(key=lambda x: x.get("timestamp", ""))
+
         return {
-            "channel_id": channel_data.get("id"),
-            "short_channel_id": channel_data.get("short_channel_id"),
-            "fee_history": channel_data.get("fee_history", [])
+            "channel_id": channel_id,
+            "short_channel_id": short_channel_id,
+            "fee_history": fee_history
         }
 
     except requests.exceptions.RequestException as e:
