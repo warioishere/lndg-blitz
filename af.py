@@ -298,7 +298,7 @@ def main(channels):
         # Check new failed HTLC boost mechanism first
         if (failed_htlc_boost_amount > 0
             and row['out_percent'] <= lowliq_limit
-            and row['failed_out_boost_interval'] >= failed_htlc_boost_threshold):
+            and row.get('failed_out_boost_interval', 0) >= failed_htlc_boost_threshold):
             return failed_htlc_boost_amount
 
         if row['out_percent'] <= lowliq_limit:
