@@ -337,7 +337,7 @@ function renderChannels() {
   container.innerHTML = channels.map(channel => `
     <div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 5px; overflow: hidden;">
       <!-- Channel Header -->
-      <div style="background-color: #f9f9f9; padding: 15px; display: flex; justify-content: space-between; align-items: center;">
+      <div style="padding: 15px; display: flex; justify-content: space-between; align-items: center;">
         <div style="flex: 1;">
           <h3 style="margin: 0; cursor: pointer;" onclick="toggleChart('${channel.id}')">
             <span style="margin-right: 10px;">${channel.collapsed ? '▶' : '▼'}</span>
