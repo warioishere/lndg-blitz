@@ -289,6 +289,12 @@ def main(channels):
 
     # Define outbound adjustment calculation function (per channel)
     def compute_outbound_adjustment(row):
+        # Check if HTLC boost conditions are met - if yes, skip normal AF logic
+        if (htlc_boost_amount > 0
+            and row['out_percent'] <= lowliq_limit
+            and row.get('failed_out_boost_interval', 0) >= htlc_boost_threshold):
+            return htlc_boost_amount
+
         if row['out_percent'] <= lowliq_limit:
             if peer_rate_check and peer_rate_limit > 0 and row['remote_fee_rate'] >= peer_rate_limit:
                 return 0
@@ -398,15 +404,6 @@ def main(channels):
 
     channels_df['new_rate'] = channels_df.apply(enforce_cost_floor, axis=1)
     channels_df['adjustment'] = channels_df['new_rate'] - channels_df['local_fee_rate']
-
-    # Override adjustment with HTLC boost if conditions are met
-    if htlc_boost_amount > 0:
-        htlc_boost_mask = (
-            (channels_df['out_percent'] <= lowliq_limit)
-            & (channels_df['failed_out_boost_interval'] >= htlc_boost_threshold)
-        )
-        channels_df.loc[htlc_boost_mask, 'adjustment'] = htlc_boost_amount
-        channels_df.loc[htlc_boost_mask, 'new_rate'] = channels_df.loc[htlc_boost_mask, 'local_fee_rate'] + htlc_boost_amount
 
     # Compute new inbound rates
     if 'ar_max_cost' not in channels_df.columns:
