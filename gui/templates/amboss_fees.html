@@ -30,40 +30,38 @@
   </form>
 </div>
 
-<!-- Channel Fee History Section -->
+<!-- Saved Channel Fee History Section -->
 <div class="w3-container w3-padding-small">
   <hr/>
   <h2>Channel Fee History</h2>
-  <p>Query fee history for a specific channel from Amboss</p>
 
-  <div style="margin-bottom: 15px;">
-    <label for="channel_id_input">Channel ID:</label>
-    <input type="text"
-           id="channel_id_input"
-           placeholder="Enter channel ID (e.g., 850718599698046976)"
-           style="width: 350px; margin-left: 10px; margin-right: 10px;">
+  <!-- Add New Channel Form -->
+  <div style="margin-bottom: 20px; padding: 15px; background-color: #f0f0f0; border-radius: 5px;">
+    <h3 style="margin-top: 0;">Add Channel to Monitor</h3>
+    <div style="margin-bottom: 15px;">
+      <label for="channel_id_input">Channel ID:</label>
+      <input type="text"
+             id="channel_id_input"
+             placeholder="Enter channel ID (e.g., 850718599698046976)"
+             style="width: 350px; margin-left: 10px; margin-right: 10px;">
 
-    <label for="time_period_select">Time Period:</label>
-    <select id="time_period_select" style="margin-left: 10px; margin-right: 10px;">
-      <option value="1d">1 Day</option>
-      <option value="1w" selected>1 Week</option>
-      <option value="1m">1 Month</option>
-    </select>
+      <label for="channel_name_input">Custom Name:</label>
+      <input type="text"
+             id="channel_name_input"
+             placeholder="Enter channel name (e.g., My Exchange Channel)"
+             style="width: 300px; margin-left: 10px; margin-right: 10px;">
 
-    <button onclick="fetchChannelFeeHistory()" class="w3-button w3-blue">Fetch History</button>
-    <span id="loading_indicator" style="margin-left: 10px; display: none;">Loading...</span>
+      <button onclick="addChannelToMonitor()" class="w3-button w3-blue">Add Channel</button>
+      <span id="add_loading_indicator" style="margin-left: 10px; display: none;">Adding...</span>
+    </div>
+
+    <div id="add_error_message" class="w3-panel w3-red" style="display: none; margin-top: 10px;">
+      <p id="add_error_text"></p>
+    </div>
   </div>
 
-  <div id="error_message" class="w3-panel w3-red" style="display: none; margin-top: 10px;">
-    <p id="error_text"></p>
-  </div>
-
-  <div id="chart_info" style="display: none; margin-bottom: 10px;">
-    <strong>Channel:</strong> <span id="short_channel_id"></span>
-    (<span id="channel_id_display"></span>)
-  </div>
-
-  <canvas id="fee_history_chart" style="max-height: 500px; display: none;"></canvas>
+  <!-- Saved Channels List -->
+  <div id="saved_channels_container"></div>
 </div>
 
 {% if not results %}
@@ -84,76 +82,183 @@
   });
 </script>
 <script>
-let feeHistoryChart = null;
+// Storage key for saved channels
+const STORAGE_KEY = 'amboss_monitored_channels';
+const CHART_STORAGE_KEY = 'amboss_channel_charts';
 
-async function fetchChannelFeeHistory() {
+// Keep track of active charts
+let activeCharts = {};
+
+// Load channels from localStorage
+function loadChannels() {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  return stored ? JSON.parse(stored) : [];
+}
+
+// Save channels to localStorage
+function saveChannels(channels) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(channels));
+}
+
+// Add a new channel to monitor
+async function addChannelToMonitor() {
   const channelId = document.getElementById('channel_id_input').value.trim();
-  const timePeriod = document.getElementById('time_period_select').value;
-  const loadingIndicator = document.getElementById('loading_indicator');
-  const errorMessage = document.getElementById('error_message');
-  const errorText = document.getElementById('error_text');
-  const chartCanvas = document.getElementById('fee_history_chart');
-  const chartInfo = document.getElementById('chart_info');
+  const channelName = document.getElementById('channel_name_input').value.trim();
+  const loadingIndicator = document.getElementById('add_loading_indicator');
+  const errorMessage = document.getElementById('add_error_message');
+  const errorText = document.getElementById('add_error_text');
 
-  // Validate input
+  // Validate
   if (!channelId) {
-    showError('Please enter a channel ID');
+    showAddError('Please enter a channel ID');
     return;
   }
 
   if (!/^\d+$/.test(channelId)) {
-    showError('Channel ID must be numeric');
+    showAddError('Channel ID must be numeric');
     return;
   }
 
-  // Clear previous errors and show loading
+  // Check if already exists
+  const channels = loadChannels();
+  if (channels.some(c => c.id === channelId)) {
+    showAddError('Channel already in monitoring list');
+    return;
+  }
+
+  // Show loading
   errorMessage.style.display = 'none';
   loadingIndicator.style.display = 'inline';
-  chartCanvas.style.display = 'none';
-  chartInfo.style.display = 'none';
+
+  try {
+    // Verify channel exists by fetching it
+    const response = await GET('amboss_channel_fees', {
+      data: {
+        channel_id: channelId,
+        time_period: '1w'
+      }
+    });
+
+    if (response.error) {
+      showAddError(response.error);
+      loadingIndicator.style.display = 'none';
+      return;
+    }
+
+    // Add to channels list
+    channels.push({
+      id: channelId,
+      name: channelName || `Channel ${channelId}`,
+      collapsed: false
+    });
+
+    saveChannels(channels);
+    loadingIndicator.style.display = 'none';
+
+    // Clear inputs
+    document.getElementById('channel_id_input').value = '';
+    document.getElementById('channel_name_input').value = '';
+
+    // Refresh display
+    renderChannels();
+
+  } catch (error) {
+    loadingIndicator.style.display = 'none';
+    showAddError('Failed to verify channel: ' + error.message);
+    console.error('Fetch error:', error);
+  }
+}
+
+// Remove a channel from monitoring
+function removeChannel(channelId) {
+  const channels = loadChannels();
+  const filtered = channels.filter(c => c.id !== channelId);
+  saveChannels(filtered);
+
+  // Destroy chart if exists
+  if (activeCharts[channelId]) {
+    activeCharts[channelId].destroy();
+    delete activeCharts[channelId];
+  }
+
+  renderChannels();
+}
+
+// Rename a channel
+function renameChannel(channelId, newName) {
+  const channels = loadChannels();
+  const channel = channels.find(c => c.id === channelId);
+  if (channel) {
+    channel.name = newName || `Channel ${channelId}`;
+    saveChannels(channels);
+    renderChannels();
+  }
+}
+
+// Toggle chart collapse/expand
+function toggleChart(channelId) {
+  const channels = loadChannels();
+  const channel = channels.find(c => c.id === channelId);
+  if (channel) {
+    channel.collapsed = !channel.collapsed;
+    saveChannels(channels);
+    renderChannels();
+  }
+}
+
+// Fetch and render chart for a specific channel
+async function fetchAndRenderChart(channelId) {
+  const chartDiv = document.getElementById(`chart_container_${channelId}`);
+  const loadingDiv = document.getElementById(`loading_${channelId}`);
+  const errorDiv = document.getElementById(`error_${channelId}`);
+
+  loadingDiv.style.display = 'block';
+  errorDiv.style.display = 'none';
 
   try {
     const response = await GET('amboss_channel_fees', {
       data: {
         channel_id: channelId,
-        time_period: timePeriod
+        time_period: '1w'
       }
     });
 
-    loadingIndicator.style.display = 'none';
-
     if (response.error) {
-      showError(response.error);
+      errorDiv.textContent = response.error;
+      errorDiv.style.display = 'block';
+      loadingDiv.style.display = 'none';
       return;
     }
 
     if (!response.data || response.data.length === 0) {
-      showError('No fee history data available for this channel');
+      errorDiv.textContent = 'No fee history data available';
+      errorDiv.style.display = 'block';
+      loadingDiv.style.display = 'none';
       return;
     }
 
-    // Display channel info
-    document.getElementById('channel_id_display').textContent = response.channel_id || channelId;
-    document.getElementById('short_channel_id').textContent = response.short_channel_id || 'N/A';
-    chartInfo.style.display = 'block';
-
-    // Render chart
-    renderFeeHistoryChart(response);
-    chartCanvas.style.display = 'block';
+    loadingDiv.style.display = 'none';
+    renderFeeChart(channelId, response);
 
   } catch (error) {
-    loadingIndicator.style.display = 'none';
-    showError('Failed to fetch fee history: ' + error.message);
+    errorDiv.textContent = 'Failed to fetch: ' + error.message;
+    errorDiv.style.display = 'block';
+    loadingDiv.style.display = 'none';
     console.error('Fetch error:', error);
   }
 }
 
-function renderFeeHistoryChart(data) {
-  const canvas = document.getElementById('fee_history_chart');
+// Render a single fee chart
+function renderFeeChart(channelId, data) {
+  const canvasId = `chart_${channelId}`;
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+
   const ctx = canvas.getContext('2d');
 
-  if (feeHistoryChart) {
-    feeHistoryChart.destroy();
+  // Destroy old chart
+  if (activeCharts[channelId]) {
+    activeCharts[channelId].destroy();
   }
 
   // Format timestamps
@@ -162,7 +267,7 @@ function renderFeeHistoryChart(data) {
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
   });
 
-  feeHistoryChart = new Chart(ctx, {
+  activeCharts[channelId] = new Chart(ctx, {
     type: 'line',
     data: {
       labels: labels,
@@ -182,10 +287,6 @@ function renderFeeHistoryChart(data) {
       responsive: true,
       maintainAspectRatio: true,
       plugins: {
-        title: {
-          display: true,
-          text: 'Channel Fee Rate History'
-        },
         tooltip: {
           mode: 'index',
           intersect: false,
@@ -199,10 +300,6 @@ function renderFeeHistoryChart(data) {
       scales: {
         x: {
           display: true,
-          title: {
-            display: true,
-            text: 'Time'
-          },
           grid: {
             color: getGridColor()
           },
@@ -227,9 +324,58 @@ function renderFeeHistoryChart(data) {
   });
 }
 
-function showError(message) {
-  document.getElementById('error_text').textContent = message;
-  document.getElementById('error_message').style.display = 'block';
+// Render all saved channels
+function renderChannels() {
+  const container = document.getElementById('saved_channels_container');
+  const channels = loadChannels();
+
+  if (channels.length === 0) {
+    container.innerHTML = '<p style="color: #999;">No channels added yet. Add a channel above to get started.</p>';
+    return;
+  }
+
+  container.innerHTML = channels.map(channel => `
+    <div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 5px; overflow: hidden;">
+      <!-- Channel Header -->
+      <div style="background-color: #f9f9f9; padding: 15px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="flex: 1;">
+          <h3 style="margin: 0; cursor: pointer;" onclick="toggleChart('${channel.id}')">
+            <span style="margin-right: 10px;">${channel.collapsed ? '▶' : '▼'}</span>
+            <input type="text"
+                   value="${channel.name}"
+                   style="border: none; background: none; font-size: 16px; font-weight: bold; width: 400px; cursor: text;"
+                   onblur="renameChannel('${channel.id}', this.value)"
+                   onkeypress="if(event.key==='Enter') { renameChannel('${channel.id}', this.value); this.blur(); }">
+          </h3>
+          <p style="margin: 5px 0; color: #666; font-size: 12px;">Channel ID: ${channel.id}</p>
+        </div>
+        <button onclick="removeChannel('${channel.id}')" class="w3-button w3-red" style="margin-left: 10px;">Remove</button>
+      </div>
+
+      <!-- Chart Content (Collapsible) -->
+      <div style="display: ${channel.collapsed ? 'none' : 'block'}; padding: 15px; background-color: #fff;">
+        <div id="loading_${channel.id}" style="display: none; padding: 10px; color: #999;">Loading chart...</div>
+        <div id="error_${channel.id}" style="display: none; padding: 10px; background-color: #ffebee; color: #c62828; border-radius: 3px;"></div>
+        <div id="chart_container_${channel.id}">
+          <canvas id="chart_${channel.id}" style="max-height: 400px;"></canvas>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  // Load charts for non-collapsed channels
+  channels.forEach(channel => {
+    if (!channel.collapsed) {
+      setTimeout(() => fetchAndRenderChart(channel.id), 100);
+    }
+  });
+}
+
+// Helper functions
+function showAddError(message) {
+  const errorText = document.getElementById('add_error_text');
+  errorText.textContent = message;
+  document.getElementById('add_error_message').style.display = 'block';
 }
 
 function getGridColor() {
@@ -237,25 +383,50 @@ function getGridColor() {
     'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
 }
 
+// Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
+  // Render saved channels
+  renderChannels();
+
+  // Enter key handler for adding channel
+  document.getElementById('channel_id_input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+      addChannelToMonitor();
+    }
+  });
+
+  document.getElementById('channel_name_input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+      addChannelToMonitor();
+    }
+  });
+
   // Theme change handler
   const themeToggle = document.getElementById('toggleTheme');
   if (themeToggle) {
     themeToggle.addEventListener('click', function() {
-      if (feeHistoryChart) {
-        feeHistoryChart.options.scales.x.grid.color = getGridColor();
-        feeHistoryChart.options.scales.y.grid.color = getGridColor();
-        feeHistoryChart.update();
-      }
+      // Update all active charts
+      Object.values(activeCharts).forEach(chart => {
+        chart.options.scales.x.grid.color = getGridColor();
+        chart.options.scales.y.grid.color = getGridColor();
+        chart.update();
+      });
     });
   }
 
-  // Enter key handler
-  document.getElementById('channel_id_input').addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') {
-      fetchChannelFeeHistory();
-    }
-  });
+  // Auto-update charts based on amb_update_hours
+  const enabled = {{ amb_enabled|default:0 }};
+  const hours = {{ amb_update_hours|default:0 }};
+  if (enabled && hours > 0) {
+    setInterval(function() {
+      const channels = loadChannels();
+      channels.forEach(channel => {
+        if (!channel.collapsed) {
+          fetchAndRenderChart(channel.id);
+        }
+      });
+    }, hours * 3600 * 1000);
+  }
 });
 </script>
 {% endblock %}
