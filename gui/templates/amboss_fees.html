@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block title %} {{ block.super }} - Amboss Fees{% endblock %}
+{% load static %}
+<script src="{% static 'charts.js' %}"></script>
 {% block content %}
 {% load humanize dict_extras %}
 <div class="w3-container w3-padding-small">
@@ -27,6 +29,43 @@
     </table>
   </form>
 </div>
+
+<!-- Channel Fee History Section -->
+<div class="w3-container w3-padding-small">
+  <hr/>
+  <h2>Channel Fee History</h2>
+  <p>Query fee history for a specific channel from Amboss</p>
+
+  <div style="margin-bottom: 15px;">
+    <label for="channel_id_input">Channel ID:</label>
+    <input type="text"
+           id="channel_id_input"
+           placeholder="Enter channel ID (e.g., 850718599698046976)"
+           style="width: 350px; margin-left: 10px; margin-right: 10px;">
+
+    <label for="time_period_select">Time Period:</label>
+    <select id="time_period_select" style="margin-left: 10px; margin-right: 10px;">
+      <option value="1d">1 Day</option>
+      <option value="1w" selected>1 Week</option>
+      <option value="1m">1 Month</option>
+    </select>
+
+    <button onclick="fetchChannelFeeHistory()" class="w3-button w3-blue">Fetch History</button>
+    <span id="loading_indicator" style="margin-left: 10px; display: none;">Loading...</span>
+  </div>
+
+  <div id="error_message" class="w3-panel w3-red" style="display: none; margin-top: 10px;">
+    <p id="error_text"></p>
+  </div>
+
+  <div id="chart_info" style="display: none; margin-bottom: 10px;">
+    <strong>Channel:</strong> <span id="short_channel_id"></span>
+    (<span id="channel_id_display"></span>)
+  </div>
+
+  <canvas id="fee_history_chart" style="max-height: 500px; display: none;"></canvas>
+</div>
+
 {% if not results %}
 <div class="w3-container w3-padding-small">
   <center><h1>No Amboss data available.</h1></center>
@@ -43,5 +82,180 @@
       setInterval(function(){ window.location.href = '/amboss-fees?fetch=1'; }, hours * 3600 * 1000);
     }
   });
+</script>
+<script>
+let feeHistoryChart = null;
+
+async function fetchChannelFeeHistory() {
+  const channelId = document.getElementById('channel_id_input').value.trim();
+  const timePeriod = document.getElementById('time_period_select').value;
+  const loadingIndicator = document.getElementById('loading_indicator');
+  const errorMessage = document.getElementById('error_message');
+  const errorText = document.getElementById('error_text');
+  const chartCanvas = document.getElementById('fee_history_chart');
+  const chartInfo = document.getElementById('chart_info');
+
+  // Validate input
+  if (!channelId) {
+    showError('Please enter a channel ID');
+    return;
+  }
+
+  if (!/^\d+$/.test(channelId)) {
+    showError('Channel ID must be numeric');
+    return;
+  }
+
+  // Clear previous errors and show loading
+  errorMessage.style.display = 'none';
+  loadingIndicator.style.display = 'inline';
+  chartCanvas.style.display = 'none';
+  chartInfo.style.display = 'none';
+
+  try {
+    const response = await GET('amboss_channel_fees', {
+      data: {
+        channel_id: channelId,
+        time_period: timePeriod
+      }
+    });
+
+    loadingIndicator.style.display = 'none';
+
+    if (response.error) {
+      showError(response.error);
+      return;
+    }
+
+    if (!response.data || response.data.length === 0) {
+      showError('No fee history data available for this channel');
+      return;
+    }
+
+    // Display channel info
+    document.getElementById('channel_id_display').textContent = response.channel_id || channelId;
+    document.getElementById('short_channel_id').textContent = response.short_channel_id || 'N/A';
+    chartInfo.style.display = 'block';
+
+    // Render chart
+    renderFeeHistoryChart(response);
+    chartCanvas.style.display = 'block';
+
+  } catch (error) {
+    loadingIndicator.style.display = 'none';
+    showError('Failed to fetch fee history: ' + error.message);
+    console.error('Fetch error:', error);
+  }
+}
+
+function renderFeeHistoryChart(data) {
+  const canvas = document.getElementById('fee_history_chart');
+  const ctx = canvas.getContext('2d');
+
+  if (feeHistoryChart) {
+    feeHistoryChart.destroy();
+  }
+
+  // Format timestamps
+  const labels = data.labels.map(ts => {
+    const date = new Date(parseInt(ts) * 1000);
+    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+  });
+
+  feeHistoryChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Fee Rate (milli-msat)',
+        data: data.data,
+        borderColor: 'rgba(33, 150, 243, 1)',
+        backgroundColor: 'rgba(33, 150, 243, 0.1)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.1,
+        pointRadius: 3,
+        pointHoverRadius: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        title: {
+          display: true,
+          text: 'Channel Fee Rate History'
+        },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            label: function(context) {
+              return 'Fee Rate: ' + context.parsed.y.toLocaleString() + ' milli-msat';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          display: true,
+          title: {
+            display: true,
+            text: 'Time'
+          },
+          grid: {
+            color: getGridColor()
+          },
+          ticks: {
+            maxRotation: 45,
+            minRotation: 45
+          }
+        },
+        y: {
+          display: true,
+          title: {
+            display: true,
+            text: 'Fee Rate (milli-msat)'
+          },
+          grid: {
+            color: getGridColor()
+          },
+          beginAtZero: true
+        }
+      }
+    }
+  });
+}
+
+function showError(message) {
+  document.getElementById('error_text').textContent = message;
+  document.getElementById('error_message').style.display = 'block';
+}
+
+function getGridColor() {
+  return document.body.classList.contains('dark-mode') ?
+    'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  // Theme change handler
+  const themeToggle = document.getElementById('toggleTheme');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', function() {
+      if (feeHistoryChart) {
+        feeHistoryChart.options.scales.x.grid.color = getGridColor();
+        feeHistoryChart.options.scales.y.grid.color = getGridColor();
+        feeHistoryChart.update();
+      }
+    });
+  }
+
+  // Enter key handler
+  document.getElementById('channel_id_input').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+      fetchChannelFeeHistory();
+    }
+  });
+});
 </script>
 {% endblock %}

@@ -30,7 +30,7 @@ from pandas import DataFrame, merge
 from requests import get
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from amboss import fetch_amboss_data
+from amboss import fetch_amboss_data, fetch_channel_fee_history, AmbossAPIError
 
 logger = logging.getLogger(__name__)
 from secrets import token_bytes
@@ -635,6 +635,52 @@ def amboss_fees(request):
         return render(request, 'amboss_fees.html', context)
     else:
         return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def amboss_channel_fee_history(request):
+    """API endpoint to fetch channel fee history from Amboss."""
+    if request.method != 'GET':
+        return JsonResponse({'error': 'Only GET method allowed'}, status=405)
+
+    channel_id = request.GET.get('channel_id', '').strip()
+    time_period = request.GET.get('time_period', '1w')
+
+    # Validate channel_id
+    if not channel_id:
+        return JsonResponse({'error': 'channel_id parameter required'}, status=400)
+
+    if not channel_id.isdigit():
+        return JsonResponse({'error': 'channel_id must be numeric'}, status=400)
+
+    # Get API key from settings
+    key_setting = LocalSettings.objects.filter(key='AMB-ApiKey').first()
+    api_key = key_setting.value if key_setting else ''
+
+    if not api_key:
+        logger.warning("Amboss API key not configured")
+        return JsonResponse({'error': 'Amboss API key not configured'}, status=400)
+
+    try:
+        # Fetch fee history
+        result = fetch_channel_fee_history(channel_id, api_key, time_period, timeout=10)
+
+        # Transform for chart.js format
+        chart_data = {
+            'channel_id': result['channel_id'],
+            'short_channel_id': result['short_channel_id'],
+            'labels': [point['timestamp'] for point in result['fee_history']],
+            'data': [point['fee_rate_milli_msat'] for point in result['fee_history']]
+        }
+
+        logger.info(f"Fetched {len(chart_data['data'])} fee history points for channel {channel_id}")
+        return JsonResponse(chart_data)
+
+    except AmbossAPIError as e:
+        logger.error(f"Amboss API error for channel {channel_id}: {e}")
+        return JsonResponse({'error': str(e)}, status=500)
+    except Exception as e:
+        logger.error(f"Unexpected error fetching channel fee history: {e}")
+        return JsonResponse({'error': 'Internal server error'}, status=500)
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def balances(request):

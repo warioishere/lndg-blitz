@@ -108,5 +108,6 @@ urlpatterns = [
     path('api/forwards_summary/', views.forwards_summary, name='forwards-summary'),
     path('api/sign_message/', views.sign_message, name='sign-message'),
     path('api/reset/', views.reset_api, name='reset-api'),
+    path('api/amboss_channel_fees/', views.amboss_channel_fee_history, name='amboss-channel-fee-history'),
     path('lndg-admin/', admin.site.urls),
 ]

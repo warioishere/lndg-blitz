@@ -71,3 +71,67 @@ def fetch_amboss_data(pubkey, api_key, time_range="TODAY", timeout=10):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error fetching Amboss data for {time_range}: {e}")
         raise AmbossAPIError(f"Error fetching Amboss data for {time_range}: {e}")
+
+
+def fetch_channel_fee_history(channel_id, api_key, time_period="1w", timeout=10):
+    """Fetch fee history for a specific channel from Amboss API."""
+    amboss_url = "https://api.amboss.space/graphql"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    query = """
+        query ChannelFeeInfo($channel_id: String!, $time_period: String!) {
+            getChannel(id: $channel_id) {
+                id
+                short_channel_id
+                fee_history(time_period: $time_period) {
+                    timestamp
+                    fee_rate_milli_msat
+                }
+            }
+        }
+    """
+
+    variables = {
+        "channel_id": str(channel_id),
+        "time_period": time_period
+    }
+
+    payload = {"query": query, "variables": variables}
+
+    try:
+        logging.debug(f"Fetching channel {channel_id} fee history for {time_period}")
+        response = requests.post(
+            amboss_url, json=payload, headers=headers, timeout=timeout
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        logging.debug(f"Amboss channel fee history response: {json.dumps(data)}")
+
+        if data.get("errors"):
+            error_msg = f"Amboss API error: {data['errors']}"
+            logging.error(error_msg)
+            raise AmbossAPIError(error_msg)
+
+        channel_data = data.get("data", {}).get("getChannel")
+        if not channel_data:
+            logging.warning(f"No channel data found for channel_id {channel_id}")
+            return {
+                "channel_id": channel_id,
+                "short_channel_id": None,
+                "fee_history": []
+            }
+
+        return {
+            "channel_id": channel_data.get("id"),
+            "short_channel_id": channel_data.get("short_channel_id"),
+            "fee_history": channel_data.get("fee_history", [])
+        }
+
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Error fetching Amboss channel fee history: {e}"
+        logging.error(error_msg)
+        raise AmbossAPIError(error_msg)
