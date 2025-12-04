@@ -877,9 +877,7 @@ def emergency_fee_job(stub):
 def failed_htlc_boost_job(stub):
     """
     Independent failed HTLC boost mechanism.
-    Monitors failed HTLCs over a configurable interval and applies a fixed fee boost
-    when threshold is met for channels below liquidity limit.
-    Respects the configured interval - only checks/applies once per interval window.
+    Checks EVERY AF-HTLCBoostIntvl minutes if failed HTLCs >= threshold, then applies boost.
     """
     # Get settings with defaults
     try:
@@ -906,9 +904,6 @@ def failed_htlc_boost_job(stub):
     if boost_amount <= 0:
         return
 
-    # Calculate lookback window for failed HTLC counting
-    filter_boost_interval = datetime.now() - timedelta(minutes=boost_interval)
-
     # Get channels below liquidity limit
     channels = Channels.objects.filter(is_open=True)
 
@@ -920,18 +915,17 @@ def failed_htlc_boost_job(stub):
         if local_percent > lowliq_limit:
             continue
 
-        # Check if we've already applied boost recently (within the interval)
-        # Only apply boost once per interval window
+        # Check if we should run the check: only every AF-HTLCBoostIntvl minutes
+        # Use htlc_boost_checked field to track last check time (or create one if needed)
         threshold_time = datetime.now() - timedelta(minutes=boost_interval)
-        last_boost_applied = Autofees.objects.filter(
-            chan_id=ch.chan_id,
-            setting='HTLC Boost Job',
-            timestamp__gte=threshold_time
-        ).exists()
 
-        # If boost already applied in this interval, skip
-        if last_boost_applied:
+        # Check if enough time has passed since last boost check
+        if ch.htlc_boost_checked and ch.htlc_boost_checked > threshold_time:
+            # Not enough time has passed, skip
             continue
+
+        # Enough time has passed, now check failed HTLCs in the interval window
+        filter_boost_interval = datetime.now() - timedelta(minutes=boost_interval)
 
         # Count failed HTLCs in the interval for this channel's outbound
         failed_htlc_count = FailedHTLCs.objects.filter(
@@ -942,6 +936,10 @@ def failed_htlc_boost_job(stub):
         ).filter(
             Q(amount__gt=0)
         ).count()
+
+        # Mark that we've checked this channel
+        ch.htlc_boost_checked = datetime.now()
+        ch.save()
 
         # If threshold met, apply boost
         if failed_htlc_count >= boost_threshold:
@@ -976,7 +974,6 @@ def failed_htlc_boost_job(stub):
                 ch.save()
             except Exception as e:
                 print(f"{datetime.now().strftime('%c')} : [Data] : Error applying HTLC boost to {ch.chan_id}: {str(e)}")
-                continue
 
 
 def agg_htlcs(target_htlcs, category):

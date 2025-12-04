@@ -157,6 +157,7 @@ class Channels(models.Model):
     flp_safety = models.IntegerField(default=0)
     ep_updated = models.DateTimeField(default=timezone.now)
     fees_updated = models.DateTimeField(default=timezone.now)
+    htlc_boost_checked = models.DateTimeField(null=True, default=None)
     auto_fees = models.BooleanField()
     notes = models.TextField(default='', blank=True)
 
