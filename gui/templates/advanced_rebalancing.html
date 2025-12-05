@@ -72,5 +72,24 @@
     </tr>
     {% endfor %}
   </table>
+
+  <!-- Apply All PPM Diff Section -->
+  <div style="margin-top: 20px; padding: 15px; background-color: rgba(33, 150, 243, 0.1); border-radius: 5px;">
+    <form action="/advanced_rebalancing" method="post" style="display: flex; align-items: center; gap: 10px;">
+      {% csrf_token %}
+      <label for="ppm_diff_apply" style="font-weight: bold;">PPM Diff Value:</label>
+      <input type="number"
+             id="ppm_diff_apply"
+             name="ppm_diff_value"
+             placeholder="Enter PPM Diff"
+             style="width: 120px; padding: 8px; text-align: center;"
+             required />
+      <input type="submit"
+             name="action"
+             value="Apply All"
+             class="w3-button w3-blue" />
+      <span style="color: #666; font-size: 12px; margin-left: 10px;">Apply PPM Diff to all source channels</span>
+    </form>
+  </div>
 </div>
 {% endblock %}

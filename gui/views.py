@@ -338,6 +338,23 @@ def advanced_rebalancing(request):
             messages.success(request, 'Allowed targets updated.')
             return redirect('advanced-rebalancing')
 
+        if action == 'Apply All':
+            ppm_diff_value = request.POST.get('ppm_diff_value')
+            if not ppm_diff_value:
+                messages.error(request, 'Please enter a PPM Diff value.')
+                return redirect('advanced-rebalancing')
+            try:
+                ppm_value = int(ppm_diff_value)
+                if ppm_value < 0:
+                    messages.error(request, 'PPM Diff must be a positive number.')
+                    return redirect('advanced-rebalancing')
+                count = Channels.objects.filter(is_open=True, auto_rebalance=True).update(ar_source_ppm_diff=ppm_value)
+                messages.success(request, f'Applied PPM Diff ({ppm_value}) to {count} channel{"s" if count != 1 else ""}.')
+                return redirect('advanced-rebalancing')
+            except ValueError:
+                messages.error(request, 'Invalid PPM Diff value.')
+                return redirect('advanced-rebalancing')
+
         if not targets:
             targets = list(
                 Channels.objects.filter(
