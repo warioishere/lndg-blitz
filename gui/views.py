@@ -529,106 +529,17 @@ def peers(request):
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def amboss_fees(request):
     if request.method == 'GET':
-        # Retrieve unique pubkeys for all open channels, including inactive ones
-        channels = list(
-            Channels.objects.filter(is_open=True)
-            .values('remote_pubkey', 'alias')
-            .order_by('remote_pubkey')
-            .distinct('remote_pubkey')
-        )
-        # sort peers alphabetically by alias for consistent display
-        channels.sort(key=lambda c: (c.get('alias') or '').lower())
-        key_setting = LocalSettings.objects.filter(key='AMB-ApiKey').first()
         enabled_setting = LocalSettings.objects.filter(key='AMB-Enabled').first()
         update_setting = LocalSettings.objects.filter(key='AMB-UpdateHours').first()
-        selected_setting = LocalSettings.objects.filter(key='AMB-SelectedPeers').first()
-        api_key = key_setting.value if key_setting else ''
         auto_enabled = int(enabled_setting.value) if enabled_setting else 0
         update_hours = float(update_setting.value) if update_setting and update_setting.value else 0
-        logger.info(
-            f"amboss_fees page requested - peers:{len(channels)} api_key_present:{bool(api_key)}"
-        )
-        time_range = "TODAY"
-        results = []
-        stored_selected = []
-        if selected_setting and selected_setting.value:
-            stored_selected = [s for s in selected_setting.value.split(',') if s]
-        selected_pubkeys = request.GET.getlist('pubkey') or stored_selected
-        fetch_now = request.GET.get('fetch')
-        if fetch_now and api_key and selected_pubkeys:
-            selected_set = set(selected_pubkeys)
-            def fetch_peer(ch):
-                pubkey = ch['remote_pubkey']
-                row = {'pubkey': pubkey, 'alias': ch['alias']}
-                if pubkey in selected_set:
-                    logger.debug(f"Fetching amboss data for peer {pubkey}")
-                    try:
-                        fee_data = fetch_amboss_data(pubkey, api_key, time_range, timeout=5)
-                        row['mean'] = fee_data.get('mean')
-                        row['median'] = fee_data.get('median')
-                        AmbossPeerFees.objects.update_or_create(
-                            pubkey=pubkey,
-                            defaults={
-                                'mean_today': row['mean'],
-                                'median_today': row['median'],
-                                'updated_at': timezone.now(),
-                            },
-                        )
-                    except Exception as e:
-                        logger.error(f"Amboss error for {pubkey}: {e}")
-                        row['mean'] = None
-                        row['median'] = None
-                else:
-                    row['mean'] = None
-                    row['median'] = None
-                return row
 
-            with ThreadPoolExecutor(max_workers=min(10, len(channels))) as ex:
-                futures = {ex.submit(fetch_peer, ch): idx for idx, ch in enumerate(channels)}
-                results_tmp = [None] * len(channels)
-                for fut in as_completed(futures):
-                    idx = futures[fut]
-                    results_tmp[idx] = fut.result()
-                results.extend(results_tmp)
+        logger.info("Amboss channel fee history page requested")
 
-            if selected_setting:
-                selected_setting.value = ','.join(selected_pubkeys)
-                selected_setting.save()
-            else:
-                LocalSettings.objects.create(key='AMB-SelectedPeers', value=','.join(selected_pubkeys))
-        elif fetch_now and api_key:
-            logger.info("Amboss fetch requested with no peer selections")
-            for ch in channels:
-                stored = AmbossPeerFees.objects.filter(pubkey=ch['remote_pubkey']).first()
-                row = {
-                    'pubkey': ch['remote_pubkey'],
-                    'alias': ch['alias'],
-                    'mean': stored.mean_today if stored else None,
-                    'median': stored.median_today if stored else None,
-                }
-                results.append(row)
-        elif not api_key:
-            logger.warning("Amboss API key not configured")
-        else:
-            # no fetch requested - just list peers
-            for ch in channels:
-                stored = AmbossPeerFees.objects.filter(pubkey=ch['remote_pubkey']).first()
-                row = {
-                    'pubkey': ch['remote_pubkey'],
-                    'alias': ch['alias'],
-                    'mean': stored.mean_today if stored else None,
-                    'median': stored.median_today if stored else None,
-                }
-                results.append(row)
         context = {
-            'results': results,
-            'amb_time_range': time_range,
             'local_settings': get_local_settings('AMB-'),
             'amb_update_hours': update_hours,
             'amb_enabled': auto_enabled,
-            'selected_pubkeys': selected_pubkeys,
-            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
-            'graph_links': graph_links()
         }
         if request.GET.get('ajax'):
             return JsonResponse(context)
