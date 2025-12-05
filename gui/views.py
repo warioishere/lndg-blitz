@@ -319,25 +319,9 @@ def advanced(request):
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def advanced_rebalancing(request):
     if request.method == 'POST':
-        source_chan_id = request.POST.get('source_chan_id')
-        targets = request.POST.getlist('targets')
         action = request.POST.get('action', 'Rebalance')
-        value = int(request.POST.get('value', 0))
-        fee_limit = float(request.POST.get('fee_limit', 0))
-        duration = int(request.POST.get('duration', 1))
-        try:
-            source = Channels.objects.get(chan_id=source_chan_id)
-        except Channels.DoesNotExist:
-            messages.error(request, 'Invalid channel id.')
-            return redirect('advanced-rebalancing')
 
-        if action == 'Save Targets':
-            AllowedTarget.objects.filter(source_chan=source).delete()
-            for pubkey in targets:
-                AllowedTarget(source_chan=source, target_pubkey=pubkey).save()
-            messages.success(request, 'Allowed targets updated.')
-            return redirect('advanced-rebalancing')
-
+        # Handle Apply All PPM Diff - no channel ID needed
         if action == 'Apply All':
             ppm_diff_value = request.POST.get('ppm_diff_value')
             if not ppm_diff_value:
@@ -354,6 +338,25 @@ def advanced_rebalancing(request):
             except ValueError:
                 messages.error(request, 'Invalid PPM Diff value.')
                 return redirect('advanced-rebalancing')
+
+        # All other actions require channel ID
+        source_chan_id = request.POST.get('source_chan_id')
+        targets = request.POST.getlist('targets')
+        value = int(request.POST.get('value', 0))
+        fee_limit = float(request.POST.get('fee_limit', 0))
+        duration = int(request.POST.get('duration', 1))
+        try:
+            source = Channels.objects.get(chan_id=source_chan_id)
+        except Channels.DoesNotExist:
+            messages.error(request, 'Invalid channel id.')
+            return redirect('advanced-rebalancing')
+
+        if action == 'Save Targets':
+            AllowedTarget.objects.filter(source_chan=source).delete()
+            for pubkey in targets:
+                AllowedTarget(source_chan=source, target_pubkey=pubkey).save()
+            messages.success(request, 'Allowed targets updated.')
+            return redirect('advanced-rebalancing')
 
         if not targets:
             targets = list(
