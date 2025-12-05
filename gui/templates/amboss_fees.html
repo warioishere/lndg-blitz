@@ -303,22 +303,39 @@ function renderChannels() {
     return;
   }
 
+  // Create 2-column grid layout
+  container.style.display = 'grid';
+  container.style.gridTemplateColumns = '1fr 1fr';
+  container.style.gap = '20px';
+  container.style.marginBottom = '20px';
+
   container.innerHTML = channels.map(channel => `
-    <div style="margin-bottom: 20px; border: 1px solid #ddd; border-radius: 5px; overflow: hidden;">
+    <div
+      id="channel_card_${channel.id}"
+      draggable="true"
+      style="border: 1px solid #ddd; border-radius: 5px; overflow: hidden; cursor: move; transition: opacity 0.2s;"
+      ondragstart="handleDragStart(event, '${channel.id}')"
+      ondragover="handleDragOver(event)"
+      ondrop="handleDrop(event, '${channel.id}')"
+      ondragleave="handleDragLeave(event)"
+      ondragend="handleDragEnd(event)">
+
       <!-- Channel Header -->
-      <div style="padding: 15px; display: flex; justify-content: space-between; align-items: center;">
+      <div style="padding: 15px; display: flex; justify-content: space-between; align-items: center; user-select: none;">
         <div style="flex: 1;">
           <h3 style="margin: 0; cursor: pointer;" onclick="toggleChart('${channel.id}')">
+            <span style="margin-right: 5px; font-size: 12px; opacity: 0.5;">⋮⋮</span>
             <span style="margin-right: 10px;">${channel.collapsed ? '▶' : '▼'}</span>
             <input type="text"
                    value="${channel.name}"
-                   style="border: none; background: none; font-size: 16px; font-weight: bold; width: 400px; cursor: text;"
+                   style="border: none; background: none; font-size: 16px; font-weight: bold; width: 300px; cursor: text;"
                    onblur="renameChannel('${channel.id}', this.value)"
-                   onkeypress="if(event.key==='Enter') { renameChannel('${channel.id}', this.value); this.blur(); }">
+                   onkeypress="if(event.key==='Enter') { renameChannel('${channel.id}', this.value); this.blur(); }"
+                   onclick="event.stopPropagation();">
           </h3>
           <p style="margin: 5px 0; color: #666; font-size: 12px;">Channel ID: ${channel.id}</p>
         </div>
-        <button onclick="removeChannel('${channel.id}')" class="w3-button w3-red" style="margin-left: 10px;">Remove</button>
+        <button onclick="removeChannel('${channel.id}')" class="w3-button w3-red" style="margin-left: 10px; white-space: nowrap;">Remove</button>
       </div>
 
       <!-- Chart Content (Collapsible) -->
@@ -326,7 +343,7 @@ function renderChannels() {
         <div id="loading_${channel.id}" style="display: none; padding: 10px; color: #999;">Loading chart...</div>
         <div id="error_${channel.id}" style="display: none; padding: 10px; background-color: #ffebee; color: #c62828; border-radius: 3px;"></div>
         <div id="chart_container_${channel.id}">
-          <canvas id="chart_${channel.id}" style="max-height: 400px;"></canvas>
+          <canvas id="chart_${channel.id}" style="max-height: 350px;"></canvas>
         </div>
       </div>
     </div>
@@ -338,6 +355,59 @@ function renderChannels() {
       setTimeout(() => fetchAndRenderChart(channel.id), 100);
     }
   });
+}
+
+// Drag and drop handlers
+let draggedChannelId = null;
+
+function handleDragStart(event, channelId) {
+  draggedChannelId = channelId;
+  event.dataTransfer.effectAllowed = 'move';
+  event.target.closest('[draggable]').style.opacity = '0.5';
+}
+
+function handleDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  const card = event.target.closest('[draggable]');
+  if (card) {
+    card.style.borderTop = '3px solid #2196F3';
+  }
+}
+
+function handleDragLeave(event) {
+  const card = event.target.closest('[draggable]');
+  if (card) {
+    card.style.borderTop = '';
+  }
+}
+
+function handleDrop(event, targetChannelId) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const card = event.target.closest('[draggable]');
+  if (card) {
+    card.style.borderTop = '';
+  }
+
+  if (draggedChannelId && draggedChannelId !== targetChannelId) {
+    const channels = loadChannels();
+    const draggedIndex = channels.findIndex(c => c.id === draggedChannelId);
+    const targetIndex = channels.findIndex(c => c.id === targetChannelId);
+
+    if (draggedIndex !== -1 && targetIndex !== -1) {
+      // Swap channels
+      [channels[draggedIndex], channels[targetIndex]] = [channels[targetIndex], channels[draggedIndex]];
+      saveChannels(channels);
+      renderChannels();
+    }
+  }
+}
+
+function handleDragEnd(event) {
+  event.target.closest('[draggable]').style.opacity = '1';
+  draggedChannelId = null;
 }
 
 // Helper functions
