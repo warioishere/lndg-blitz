@@ -375,6 +375,9 @@ def main(channels):
     channels_df['new_rate'] = channels_df['local_fee_rate'] + channels_df['adjustment']
     channels_df['new_rate'] = (channels_df['new_rate'] / increment).round(0) * increment
     channels_df['new_rate'] = channels_df['new_rate'].clip(min_rate, max_rate)
+    # Store rate before floor enforcement to detect if cost floor blocks the change
+    channels_df['new_rate_before_floor'] = channels_df['new_rate']
+    channels_df['adjustment_before_floor'] = channels_df['adjustment']
     def compute_cost_floor(row):
         if not flp_enabled_global:
             return 0
@@ -419,9 +422,21 @@ def main(channels):
     channels_df['new_rate'] = channels_df.apply(enforce_cost_floor, axis=1)
     channels_df['adjustment'] = channels_df['new_rate'] - channels_df['local_fee_rate']
 
-    # Debug: Log channels >= excess_limit
+    # Debug: Log cost floor blocks
     import logging
     logger = logging.getLogger(__name__)
+
+    # Find channels where cost floor prevented a fee decrease
+    blocked_decreases = channels_df[
+        (channels_df['adjustment_before_floor'] < 0) &
+        (channels_df['adjustment'] > channels_df['adjustment_before_floor'])
+    ]
+    if not blocked_decreases.empty:
+        logger.warning(f"=== AF Debug: Cost Floor Blocked Fee Decreases ===")
+        for idx, row in blocked_decreases.iterrows():
+            logger.warning(f"  chan_id={row['chan_id']}: wanted_decrease={row['adjustment_before_floor']:.0f} ppm→blocked at={row['adjustment']:.0f} ppm, current_rate={row['local_fee_rate']}, cost_floor={row.get('cost_floor'):.0f}, avg_rebalance_cost={row.get('avg_rebalance_cost', 0):.0f}, flp_safety={row.get('flp_safety', 0)}")
+
+    # Debug: Log channels >= excess_limit
     high_out_channels = channels_df[channels_df['overall_out_percent'] >= excess_limit]
     if not high_out_channels.empty:
         logger.warning(f"=== AF Debug: Channels with overall_out_percent >= {excess_limit}% ===")
