@@ -50,6 +50,7 @@ def main(channels):
     excess_boost_enabled = get_local_setting('AF-ExcessBoostOn', '0', str) == '1'
     peer_rate_check = get_local_setting('AF-PeerRateCheck', '0', str) == '1'
     peer_rate_limit = get_local_setting('AF-PeerRateLimit', 0, int)
+    bypass_peer_rate_on_htlc = get_local_setting('AF-BypassPeerRateOnHTLC', '0', str) == '1'
     flow_scale = get_local_setting('AF-FlowScale', 1.0, float)
     max_step = get_local_setting('AF-MaxStep', 100, int)
     MAX_NET_FLOW = 3
@@ -297,7 +298,11 @@ def main(channels):
 
         if row['out_percent'] <= lowliq_limit:
             if peer_rate_check and peer_rate_limit > 0 and row['remote_fee_rate'] >= peer_rate_limit:
-                return 0
+                # Allow override if HTLC boost conditions are met and override is enabled
+                has_htlc_conditions = (htlc_boost_amount > 0 and
+                                      row.get('failed_out_boost_interval', 0) >= htlc_boost_threshold)
+                if not (bypass_peer_rate_on_htlc and has_htlc_conditions):
+                    return 0
             boost = 0
             if boost_ar_only and row.get('auto_rebalance'):
                 deficit = max(0, lowliq_limit - row['out_percent'])
