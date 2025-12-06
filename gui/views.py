@@ -2570,7 +2570,7 @@ def get_local_settings(*prefixes):
         form.append({'unit': '', 'form_id': 'af_lowliqboostar', 'value': 0, 'label': 'AF Boost AR Only', 'id': 'AF-LowLiqBoostAR', 'title': 'Apply boost only to channels with Auto-Rebalance enabled; Off disables the boost', 'min':0, 'max':1})
         form.append({'unit': 'ppm', 'form_id': 'af_peer_rate_limit', 'value': 0, 'label': 'Peer oRate Limit', 'id': 'AF-PeerRateLimit', 'title': 'Only raise fees if peer oRate below this limit; 0 disables', 'min':0, 'max':5000})
         form.append({'unit': '', 'form_id': 'af_peer_rate_check', 'value': 0, 'label': 'Peer Rate Check', 'id': 'AF-PeerRateCheck', 'title': 'Enable/Disable peer oRate limit check', 'min':0, 'max':1})
-        form.append({'unit': '', 'form_id': 'af_bypass_peer_rate_on_htlc', 'value': 0, 'label': 'Bypass PeerRate on HTLC', 'id': 'AF-BypassPeerRateOnHTLC', 'title': 'When enabled, channels with failed HTLCs meeting the boost threshold bypass the peer rate check (allows fee increases despite peer high oRate)', 'min':0, 'max':1})
+        form.append({'unit': '', 'form_id': 'af_bypass_peer_rate_on_htlc', 'value': 0, 'label': 'Bypass PeerRate on HTLC', 'id': 'AF-BypassPeerHTLC', 'title': 'When enabled, channels with failed HTLCs meeting the boost threshold bypass the peer rate check (allows fee increases despite peer high oRate)', 'min':0, 'max':1})
         form.append({'unit': '%', 'form_id': 'af_excess', 'value': 95, 'label': 'AF Excess', 'id': 'AF-ExcessLimit', 'title': 'Limit for running excess liq AF rules (decrease for stagnant channels and those with assisting revenues). Default 95', 'min':0, 'max':100})
         form.append({'unit': 'x', 'form_id': 'af_excessboost', 'value': 1, 'label': 'AF Excess Boost', 'id': 'AF-ExcessBoost', 'title': 'Multiplier for extra fee drop when liquidity exceeds AF-ExcessLimit. Default 1', 'min':0, 'max':10})
         form.append({'unit': '', 'form_id': 'af_excessboost_on', 'value': 0, 'label': 'Excess Boost', 'id': 'AF-ExcessBoostOn', 'title': 'Enable/Disable extra decrease for excess liquidity', 'min':0, 'max':1})
@@ -2653,7 +2653,7 @@ def update_settings(request):
                     {'form_id': 'af_lowliqboostar', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-LowLiqBoostAR'},
                     {'form_id': 'af_peer_rate_limit', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-PeerRateLimit'},
                     {'form_id': 'af_peer_rate_check', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-PeerRateCheck'},
-                    {'form_id': 'af_bypass_peer_rate_on_htlc', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-BypassPeerRateOnHTLC'},
+                    {'form_id': 'af_bypass_peer_rate_on_htlc', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-BypassPeerHTLC'},
                     {'form_id': 'af_excess', 'value': 95, 'parse': lambda x: int(x),'id': 'AF-ExcessLimit'},
                     {'form_id': 'af_excessboost', 'value': 1, 'parse': lambda x: float(x),'id': 'AF-ExcessBoost'},
                     {'form_id': 'af_excessboost_on', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-ExcessBoostOn'},

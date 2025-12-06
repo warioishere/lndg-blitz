@@ -51,7 +51,7 @@ def main(channels):
     peer_rate_check = get_local_setting('AF-PeerRateCheck', '0', str) == '1'
     peer_rate_limit = get_local_setting('AF-PeerRateLimit', 0, int)
     try:
-        bypass_peer_rate_on_htlc = get_local_setting('AF-BypassPeerRateOnHTLC', '0', str) == '1'
+        bypass_peer_rate_on_htlc = get_local_setting('AF-BypassPeerHTLC', '0', str) == '1'
     except:
         bypass_peer_rate_on_htlc = False
     flow_scale = get_local_setting('AF-FlowScale', 1.0, float)
