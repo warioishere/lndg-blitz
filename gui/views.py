@@ -2691,6 +2691,9 @@ def update_settings(request):
 
         form = LocalSettingsForm(request.POST)
         if not form.is_valid():
+            logger = logging.getLogger(__name__)
+            logger.error(f"Form validation failed. Errors: {form.errors}")
+            logger.error(f"POST data keys: {list(request.POST.keys())}")
             messages.error(request, 'Invalid Request. Please try again.')
         else:
             update_channels = form.cleaned_data['update_channels']
@@ -2703,21 +2706,28 @@ def update_settings(request):
                     continue
                 try:
                     value = field['parse'](value)
-                except Exception:
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Parse error for {field['id']}: {e}")
                     messages.error(request, f"Invalid value for {field['id']}")
                     continue
-                db_value = existing_settings.get(field['id'])
-                if db_value is None:
-                    if len(str(value)) == 0:
-                        continue
-                    db_value = LocalSettings(key=field['id'], value=value)
-                    db_value.save()
-                    existing_settings[field['id']] = db_value
-                    messages.success(request, f"{field['id']} updated to: {value}")
-                elif db_value.value != str(value) and len(str(value)) > 0:
-                    db_value.value = value
-                    db_value.save()
-                    messages.success(request, f"{field['id']} updated to: {value}")
+                try:
+                    db_value = existing_settings.get(field['id'])
+                    if db_value is None:
+                        if len(str(value)) == 0:
+                            continue
+                        db_value = LocalSettings(key=field['id'], value=value)
+                        db_value.save()
+                        existing_settings[field['id']] = db_value
+                        messages.success(request, f"{field['id']} updated to: {value}")
+                    elif db_value.value != str(value) and len(str(value)) > 0:
+                        db_value.value = value
+                        db_value.save()
+                        messages.success(request, f"{field['id']} updated to: {value}")
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error saving {field['id']}={value}: {e}", exc_info=True)
+                    messages.error(request, f"Error updating {field['id']}: {e}")
 
                 if update_channels and field['id'] in ['AR-Target%', 'AR-Outbound%','AR-Inbound%','AR-MaxCost%','MX-Percent','EP-DefaultTarget','EP-IncreasePct','EP-Cooldown','EP-LiveThreshold','EP-LiveIncreasePct','EP-Enabled','FLP-Enabled','FLP-Safety'] and value is not None:
                     if field['id'] == 'AR-Target%':
@@ -2749,9 +2759,14 @@ def update_settings(request):
                     channel_messages.append(f"All channels {field['id']} updated to: {value}")
 
             if update_channels and channel_updates:
-                Channels.objects.all().update(**channel_updates)
-                for msg in channel_messages:
-                    messages.success(request, msg)
+                try:
+                    Channels.objects.all().update(**channel_updates)
+                    for msg in channel_messages:
+                        messages.success(request, msg)
+                except Exception as e:
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error updating channels: {e}", exc_info=True)
+                    messages.error(request, f"Error updating channels: {e}")
 
     return redirect(request.META.get('HTTP_REFERER', '/'))
 
