@@ -50,7 +50,10 @@ def main(channels):
     excess_boost_enabled = get_local_setting('AF-ExcessBoostOn', '0', str) == '1'
     peer_rate_check = get_local_setting('AF-PeerRateCheck', '0', str) == '1'
     peer_rate_limit = get_local_setting('AF-PeerRateLimit', 0, int)
-    bypass_peer_rate_on_htlc = get_local_setting('AF-BypassPeerRateOnHTLC', '0', str) == '1'
+    try:
+        bypass_peer_rate_on_htlc = get_local_setting('AF-BypassPeerRateOnHTLC', '0', str) == '1'
+    except:
+        bypass_peer_rate_on_htlc = False
     flow_scale = get_local_setting('AF-FlowScale', 1.0, float)
     max_step = get_local_setting('AF-MaxStep', 100, int)
     MAX_NET_FLOW = 3
