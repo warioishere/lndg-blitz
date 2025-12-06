@@ -316,6 +316,12 @@ def main(channels):
         if row['overall_out_percent'] <= lowliq_limit:
             return 0
         elif row['overall_out_percent'] >= excess_limit:
+            # Debug: Log excess boost scenario
+            if row['out_percent'] >= 95:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"ExcessBoost debug - chan_id={row.get('chan_id')}, out_percent={row['out_percent']}, overall_out_percent={row['overall_out_percent']}, remote_inbound_fee_rate={row.get('remote_inbound_fee_rate')}, excess_boost_enabled={excess_boost_enabled}, excess_boost={excess_boost}, excess_limit={excess_limit}")
+
             # Don't reduce fees if peer's inbound fee rate is positive
             if row.get('remote_inbound_fee_rate', 0) > 0:
                 return 0
@@ -404,6 +410,16 @@ def main(channels):
 
     channels_df['new_rate'] = channels_df.apply(enforce_cost_floor, axis=1)
     channels_df['adjustment'] = channels_df['new_rate'] - channels_df['local_fee_rate']
+
+    # Debug: Log channels >= excess_limit
+    import logging
+    logger = logging.getLogger(__name__)
+    high_out_channels = channels_df[channels_df['overall_out_percent'] >= excess_limit]
+    if not high_out_channels.empty:
+        logger.warning(f"=== AF Debug: Channels with overall_out_percent >= {excess_limit}% ===")
+        logger.warning(f"Settings: excess_boost_enabled={excess_boost_enabled}, excess_boost={excess_boost}, excess_limit={excess_limit}")
+        for idx, row in high_out_channels.iterrows():
+            logger.warning(f"  chan_id={row['chan_id']}: out_percent={row['out_percent']}, overall_out_percent={row['overall_out_percent']}, remote_inbound_fee_rate={row.get('remote_inbound_fee_rate')}, adjustment={row['adjustment']}, new_rate={row['new_rate']}")
 
     # Compute new inbound rates
     if 'ar_max_cost' not in channels_df.columns:
