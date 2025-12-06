@@ -2576,7 +2576,7 @@ def get_local_settings(*prefixes):
     if 'FLP-' in prefixes:
         form.append({'unit': '', 'form_id': 'update_channels', 'id': 'update_channels'})
         form.append({'unit': '', 'form_id': 'flp_enabled', 'value': 0, 'label': 'FLP Enabled', 'id': 'FLP-Enabled', 'title': 'Enable/Disable fee limit protection', 'min':0, 'max':1})
-        form.append({'unit': 'ppm', 'form_id': 'flp_safety', 'value': 0, 'label': 'Safety Distance', 'id': 'FLP-Safety', 'title': 'Subtract this value from avg cost when computing the floor', 'min':0})
+        form.append({'unit': 'ppm', 'form_id': 'flp_safety', 'value': 0, 'label': 'Safety Distance', 'id': 'FLP-Safety', 'title': 'Positive value adds safety distance, negative value reduces cost floor (allows more aggressive fee reduction)', 'max':5000})
         form.append({'unit': '', 'form_id': 'flp_lookback', 'value': 10, 'label': 'Payments Lookback', 'id': 'FLP-Lookback', 'title': 'Number of recent rebalancing payments to average', 'min':1})
     if 'IO-' in prefixes:
         form.append({'unit': '', 'form_id': 'io_enabled', 'value': 0, 'label': 'Offset Updates', 'id': 'IO-Enabled', 'title': 'Enable/Disable automatic inbound offset updates', 'min':0, 'max':1})

@@ -24,7 +24,7 @@
           <td>
             <form action="/update_channel/" method="post" style="margin:0">
               {% csrf_token %}
-              <input type="number" style="width:70px;text-align:center" name="target" value="{{ ch.flp_safety }}" min="0" onkeydown="if(event.key==='Enter'){this.form.submit();}">
+              <input type="number" style="width:70px;text-align:center" name="target" value="{{ ch.flp_safety }}" onkeydown="if(event.key==='Enter'){this.form.submit();}">
               <input type="hidden" name="chan_id" value="{{ ch.chan_id }}">
               <input type="hidden" name="update_target" value="23">
             </form>
