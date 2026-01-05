@@ -237,6 +237,23 @@ def check_and_set_allow_multishards():
         allow_multishards = False
     return allow_multishards
 
+def sort_channels_by_htlc(stub, chan_ids):
+    """Sort channel IDs by current HTLC count (real-time from LND)"""
+    try:
+        if len(chan_ids) <= 1:
+            return chan_ids
+
+        # Get current channel state from LND
+        channels = stub.ListChannels(ln.ListChannelsRequest(active_only=False)).channels
+        chan_map = {str(c.chan_id): len(c.pending_htlcs) for c in channels if str(c.chan_id) in [str(x) for x in chan_ids]}
+
+        # Sort chan_ids by HTLC count
+        sorted_ids = sorted(chan_ids, key=lambda x: chan_map.get(str(x), 999))
+        return sorted_ids
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error sorting channels by HTLC: {str(e)}")
+        return chan_ids
+
 async def run_rebalancer(rebalance, worker):
     try:
         # Check if LocalSetting LND-EnableMPP exists and set allow_mpp accordingly
@@ -264,6 +281,8 @@ async def run_rebalancer(rebalance, worker):
             stub = lnrpc.LightningStub(channel)
             routerstub = lnrouter.RouterStub(async_channel)
             chan_ids = json.loads(rebalance.outgoing_chan_ids)
+            # Sort channels by current HTLC count (real-time from LND, not DB cache)
+            chan_ids = sort_channels_by_htlc(stub, chan_ids)
             timeout = rebalance.duration * 60
             invoice_response = stub.AddInvoice(
                 ln.Invoice(value=rebalance.value, expiry=timeout)
