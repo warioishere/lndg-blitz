@@ -100,6 +100,7 @@ def get_out_cans(rebalance, auto_rebalance_channels):
                 )
             )
             .exclude(remote_pubkey__in=exclude_keys)
+            .order_by('htlc_count')
             .values_list('chan_id', flat=True)
         )
     except Exception as e:
@@ -567,6 +568,7 @@ def auto_schedule() -> List[Rebalancer]:
                     local_fee_rate__lt=F('ar_source_ppm_diff')
                 )
             )
+            .order_by('htlc_count')
             .values_list('chan_id', flat=True)
         )
         already_scheduled = (
