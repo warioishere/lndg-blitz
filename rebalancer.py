@@ -254,6 +254,8 @@ async def run_rebalancer(rebalance, worker):
         elif str(outbound_cans).replace('\'', '') != rebalance.outgoing_chan_ids and rebalance.manual == False:
             rebalance.outgoing_chan_ids = str(outbound_cans).replace('\'', '')
         rebalance.start = datetime.now()
+        successful_out = None
+        successful_in = None
         try:
             # Use shared channels for both sync and async stubs
             channel = get_shared_channel()
@@ -356,9 +358,11 @@ async def run_rebalancer(rebalance, worker):
                                 fees_msat = 0
                         rebalance.fees_paid = fees_msat / 1000 if fees_msat else 0
                         try:
-                            successful_out = payment_response.route.hops[0].pub_key
+                            successful_out = payment_response.route.hops[0].chan_id
+                            successful_in = payment_response.route.hops[-1].chan_id
                         except Exception:
                             successful_out = None
+                            successful_in = None
                         break
                     else:
                         failure = getattr(payment_response, "failure", None)
@@ -416,7 +420,8 @@ async def run_rebalancer(rebalance, worker):
                                 except Exception:
                                     fees_msat = 0
                             rebalance.fees_paid = fees_msat / 1000 if fees_msat else 0
-                            successful_out = payment_response.htlcs[0].route.hops[0].pub_key
+                            successful_out = payment_response.htlcs[0].route.hops[0].chan_id
+                            successful_in = payment_response.htlcs[0].route.hops[-1].chan_id
                             route_hex = payment_response.htlcs[0].route.SerializeToString().hex()
                             out_chan = str(payment_response.htlcs[0].route.hops[0].chan_id)
                             await update_route(rebalance.last_hop_pubkey, out_chan, route_hex, True)
@@ -459,7 +464,8 @@ async def run_rebalancer(rebalance, worker):
             inc=1.21
             dec=2
             if rebalance.status ==2:
-                await update_channels(stub, rebalance.last_hop_pubkey, successful_out)
+                if successful_in is not None and successful_out is not None:
+                    await update_channels(stub, successful_in, successful_out)
                 #Reduce potential rebalance value in percent out to avoid going below AR-OUT-Target
                 auto_rebalance_channels = Channels.objects.filter(is_active=True, is_open=True, private=False).annotate(percent_outbound=((Sum('local_balance')+Sum('pending_outbound')-rebalance.value*inc)*100)/Sum('capacity')).annotate(inbound_can=(((Sum('remote_balance')+Sum('pending_inbound'))*100)/Sum('capacity'))/Sum('ar_in_target'))
                 inbound_cans = auto_rebalance_channels.filter(remote_pubkey=rebalance.last_hop_pubkey).filter(auto_rebalance=True, inbound_can__gte=1)
@@ -513,20 +519,25 @@ def estimate_liquidity( payment ):
     return estimated_liquidity
 
 @sync_to_async
-def update_channels(stub, incoming_channel, outgoing_channel):
+def update_channels(stub, incoming_chan_id, outgoing_chan_id):
     try:
         # Incoming channel update
-        channel = stub.ListChannels(ln.ListChannelsRequest(peer=bytes.fromhex(incoming_channel))).channels[0]
-        db_channel = Channels.objects.filter(chan_id=channel.chan_id)[0]
-        db_channel.local_balance = channel.local_balance
-        db_channel.remote_balance = channel.remote_balance
-        db_channel.save()
+        channel = stub.ListChannels(ln.ListChannelsRequest(active_only=False)).channels
+        incoming_channel = next((c for c in channel if c.chan_id == incoming_chan_id), None)
+        if incoming_channel:
+            db_channel = Channels.objects.filter(chan_id=incoming_chan_id).first()
+            if db_channel:
+                db_channel.local_balance = incoming_channel.local_balance
+                db_channel.remote_balance = incoming_channel.remote_balance
+                db_channel.save()
         # Outgoing channel update
-        channel = stub.ListChannels(ln.ListChannelsRequest(peer=bytes.fromhex(outgoing_channel))).channels[0]
-        db_channel = Channels.objects.filter(chan_id=channel.chan_id)[0]
-        db_channel.local_balance = channel.local_balance
-        db_channel.remote_balance = channel.remote_balance
-        db_channel.save()
+        outgoing_channel = next((c for c in channel if c.chan_id == outgoing_chan_id), None)
+        if outgoing_channel:
+            db_channel = Channels.objects.filter(chan_id=outgoing_chan_id).first()
+            if db_channel:
+                db_channel.local_balance = outgoing_channel.local_balance
+                db_channel.remote_balance = outgoing_channel.remote_balance
+                db_channel.save()
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error updating channel balances: {str(e)}")
 
