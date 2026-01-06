@@ -324,12 +324,6 @@ def main(channels):
         if row['overall_out_percent'] <= lowliq_limit:
             return 0
         elif row['overall_out_percent'] >= excess_limit:
-            # Debug: Log excess boost scenario
-            if row['out_percent'] >= 95:
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(f"ExcessBoost debug - chan_id={row.get('chan_id')}, out_percent={row['out_percent']}, overall_out_percent={row['overall_out_percent']}, remote_inbound_fee_rate={row.get('remote_inbound_fee_rate')}, excess_boost_enabled={excess_boost_enabled}, excess_boost={excess_boost}, excess_limit={excess_limit}")
-
             # Don't reduce fees if peer's inbound fee rate is positive
             if row.get('remote_inbound_fee_rate', 0) > 0:
                 return 0
