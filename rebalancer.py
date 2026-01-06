@@ -89,7 +89,7 @@ FAILURE_DETAIL_NAMES = {
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
         exclude_keys = {rebalance.last_hop_pubkey}
-        return list(
+        result = list(
             auto_rebalance_channels
             .filter(percent_outbound__gte=F('ar_out_target'))
             .filter(
@@ -103,6 +103,9 @@ def get_out_cans(rebalance, auto_rebalance_channels):
             .order_by('htlc_count')
             .values_list('chan_id', flat=True)
         )
+        if len(result) > 1:
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : get_out_cans: Found {len(result)} candidate channels (ordered by DB htlc_count): {result}")
+        return result
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting outbound cands: {str(e)}")
 
@@ -241,14 +244,29 @@ def sort_channels_by_htlc(stub, chan_ids):
     """Sort channel IDs by current HTLC count (real-time from LND)"""
     try:
         if len(chan_ids) <= 1:
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Only 1 channel, skipping sort")
             return chan_ids
+
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Checking {len(chan_ids)} channels from DB")
 
         # Get current channel state from LND
         channels = stub.ListChannels(ln.ListChannelsRequest(active_only=False)).channels
-        chan_map = {str(c.chan_id): len(c.pending_htlcs) for c in channels if str(c.chan_id) in [str(x) for x in chan_ids]}
+        chan_map = {}
+
+        # Build map and log each channel's HTLC count
+        for c in channels:
+            if str(c.chan_id) in [str(x) for x in chan_ids]:
+                htlc_count = len(c.pending_htlcs)
+                chan_map[str(c.chan_id)] = htlc_count
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Chan {c.chan_id} has {htlc_count} pending HTLCs (LND real-time)")
 
         # Sort chan_ids by HTLC count
         sorted_ids = sorted(chan_ids, key=lambda x: chan_map.get(str(x), 999))
+
+        # Log the sorting result
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Original order: {chan_ids}")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Sorted order:   {sorted_ids}")
+
         return sorted_ids
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error sorting channels by HTLC: {str(e)}")
@@ -363,12 +381,6 @@ async def run_rebalancer(rebalance, worker):
                     )
                     # HTLCStatus uses 1 for SUCCEEDED
                     if payment_response.status == 1:
-                        print(
-                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route succeeded via {sr.outgoing_chan_id} - hash: {rebalance.payment_hash}"
-                        )
-                        await update_route(
-                            rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, True
-                        )
                         rebalance.status = 2
                         fees_msat = getattr(payment_response, "fee_msat", None)
                         if not fees_msat:
@@ -380,9 +392,18 @@ async def run_rebalancer(rebalance, worker):
                         try:
                             successful_out = payment_response.route.hops[0].chan_id
                             successful_in = payment_response.route.hops[-1].chan_id
+                            print(
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route succeeded via {sr.outgoing_chan_id} - hash: {rebalance.payment_hash}"
+                            )
+                            print(
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Used outgoing chan_id: {successful_out}, incoming chan_id: {successful_in}"
+                            )
                         except Exception:
                             successful_out = None
                             successful_in = None
+                        await update_route(
+                            rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, True
+                        )
                         break
                     else:
                         failure = getattr(payment_response, "failure", None)
@@ -421,6 +442,7 @@ async def run_rebalancer(rebalance, worker):
             if payment_response is None or payment_response.status != 1:
                     if saved_routes:
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Falling back to automatic routing")
+                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : SendPaymentV2: Sending to LND with outgoing_chan_ids={chan_ids}")
                     async for payment_response in routerstub.SendPaymentV2(lnr.SendPaymentRequest(payment_request=str(invoice_response.payment_request), fee_limit_msat=int(rebalance.fee_limit*1000), outgoing_chan_ids=chan_ids, last_hop_pubkey=bytes.fromhex(rebalance.last_hop_pubkey), timeout_seconds=(timeout-5), allow_self_payment=True, max_parts=max_parts), timeout=(timeout+60)):
                         if payment_response.status == 1 and rebalance.status == 0:
                             #IN-FLIGHT
@@ -429,9 +451,6 @@ async def run_rebalancer(rebalance, worker):
                             await save_record(rebalance)
                         elif payment_response.status == 2:
                             #SUCCESSFUL
-                            print(
-                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Automatic route (SendPaymentV2) succeeded - hash: {rebalance.payment_hash}"
-                            )
                             rebalance.status = 2
                             fees_msat = getattr(payment_response, "fee_msat", None)
                             if not fees_msat and payment_response.htlcs:
@@ -442,6 +461,12 @@ async def run_rebalancer(rebalance, worker):
                             rebalance.fees_paid = fees_msat / 1000 if fees_msat else 0
                             successful_out = payment_response.htlcs[0].route.hops[0].chan_id
                             successful_in = payment_response.htlcs[0].route.hops[-1].chan_id
+                            print(
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Automatic route (SendPaymentV2) succeeded - hash: {rebalance.payment_hash}"
+                            )
+                            print(
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : LND selected outgoing chan_id: {successful_out} from provided list: {chan_ids}"
+                            )
                             route_hex = payment_response.htlcs[0].route.SerializeToString().hex()
                             out_chan = str(payment_response.htlcs[0].route.hops[0].chan_id)
                             await update_route(rebalance.last_hop_pubkey, out_chan, route_hex, True)
@@ -541,23 +566,30 @@ def estimate_liquidity( payment ):
 @sync_to_async
 def update_channels(stub, incoming_chan_id, outgoing_chan_id):
     try:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : update_channels: Updating balances for incoming={incoming_chan_id}, outgoing={outgoing_chan_id}")
         # Incoming channel update
         channel = stub.ListChannels(ln.ListChannelsRequest(active_only=False)).channels
         incoming_channel = next((c for c in channel if c.chan_id == incoming_chan_id), None)
         if incoming_channel:
             db_channel = Channels.objects.filter(chan_id=incoming_chan_id).first()
             if db_channel:
+                old_local = db_channel.local_balance
+                old_remote = db_channel.remote_balance
                 db_channel.local_balance = incoming_channel.local_balance
                 db_channel.remote_balance = incoming_channel.remote_balance
                 db_channel.save()
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : update_channels: Incoming chan {incoming_chan_id} - local: {old_local}->{incoming_channel.local_balance}, remote: {old_remote}->{incoming_channel.remote_balance}")
         # Outgoing channel update
         outgoing_channel = next((c for c in channel if c.chan_id == outgoing_chan_id), None)
         if outgoing_channel:
             db_channel = Channels.objects.filter(chan_id=outgoing_chan_id).first()
             if db_channel:
+                old_local = db_channel.local_balance
+                old_remote = db_channel.remote_balance
                 db_channel.local_balance = outgoing_channel.local_balance
                 db_channel.remote_balance = outgoing_channel.remote_balance
                 db_channel.save()
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : update_channels: Outgoing chan {outgoing_chan_id} - local: {old_local}->{outgoing_channel.local_balance}, remote: {old_remote}->{outgoing_channel.remote_balance}")
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error updating channel balances: {str(e)}")
 
