@@ -241,35 +241,58 @@ def check_and_set_allow_multishards():
     return allow_multishards
 
 def sort_channels_by_htlc(stub, chan_ids):
-    """Sort channel IDs by current HTLC count (real-time from LND)"""
+    """Filter channels: for peers with multiple channels, only keep the one with lowest HTLC count"""
     try:
         if len(chan_ids) <= 1:
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Only 1 channel, skipping sort")
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Only 1 channel, no filtering needed")
             return chan_ids
 
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Checking {len(chan_ids)} channels from DB")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Checking {len(chan_ids)} channels from DB")
 
         # Get current channel state from LND
         channels = stub.ListChannels(ln.ListChannelsRequest(active_only=False)).channels
-        chan_map = {}
 
-        # Build map and log each channel's HTLC count
+        # Build maps for channels we care about
+        chan_data = {}  # chan_id -> {htlc_count, remote_pubkey}
         for c in channels:
             if str(c.chan_id) in [str(x) for x in chan_ids]:
                 htlc_count = len(c.pending_htlcs)
-                chan_map[str(c.chan_id)] = htlc_count
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Chan {c.chan_id} has {htlc_count} pending HTLCs (LND real-time)")
+                chan_data[str(c.chan_id)] = {
+                    'htlc_count': htlc_count,
+                    'remote_pubkey': c.remote_pubkey
+                }
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Chan {c.chan_id} has {htlc_count} pending HTLCs (peer: {c.remote_pubkey[:16]}...)")
 
-        # Sort chan_ids by HTLC count
-        sorted_ids = sorted(chan_ids, key=lambda x: chan_map.get(str(x), 999))
+        # Group channels by peer
+        peer_channels = {}  # remote_pubkey -> [(chan_id, htlc_count), ...]
+        for chan_id in chan_ids:
+            chan_id_str = str(chan_id)
+            if chan_id_str in chan_data:
+                peer = chan_data[chan_id_str]['remote_pubkey']
+                htlc_count = chan_data[chan_id_str]['htlc_count']
+                if peer not in peer_channels:
+                    peer_channels[peer] = []
+                peer_channels[peer].append((chan_id, htlc_count))
 
-        # Log the sorting result
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Original order: {chan_ids}")
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Sort: Sorted order:   {sorted_ids}")
+        # For each peer, select only the channel with lowest HTLC count
+        filtered_ids = []
+        for peer, peer_chan_list in peer_channels.items():
+            if len(peer_chan_list) > 1:
+                # Multiple channels to same peer - pick the one with lowest HTLC count
+                sorted_peer_chans = sorted(peer_chan_list, key=lambda x: x[1])
+                selected = sorted_peer_chans[0]
+                filtered_ids.append(selected[0])
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Peer {peer[:16]}... has {len(peer_chan_list)} channels - selected chan {selected[0]} with {selected[1]} HTLCs, excluded: {[f'{c[0]}({c[1]} HTLCs)' for c in sorted_peer_chans[1:]]}")
+            else:
+                # Single channel to this peer - include it
+                filtered_ids.append(peer_chan_list[0][0])
 
-        return sorted_ids
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Original list: {chan_ids}")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Filtered list: {filtered_ids} (removed {len(chan_ids) - len(filtered_ids)} channels)")
+
+        return filtered_ids
     except Exception as e:
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error sorting channels by HTLC: {str(e)}")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error filtering channels by HTLC: {str(e)}")
         return chan_ids
 
 async def run_rebalancer(rebalance, worker):
@@ -299,7 +322,7 @@ async def run_rebalancer(rebalance, worker):
             stub = lnrpc.LightningStub(channel)
             routerstub = lnrouter.RouterStub(async_channel)
             chan_ids = json.loads(rebalance.outgoing_chan_ids)
-            # Sort channels by current HTLC count (real-time from LND, not DB cache)
+            # Filter channels: for peers with multiple channels, only send the one with lowest HTLC count
             chan_ids = sort_channels_by_htlc(stub, chan_ids)
             timeout = rebalance.duration * 60
             invoice_response = stub.AddInvoice(
