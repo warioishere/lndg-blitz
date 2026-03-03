@@ -270,17 +270,30 @@ def full_fee_adj(request):
             if new_rate < 0:
                 new_rate = 0
             channel_point = point(ch)
-            stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(
+            policy_kwargs = dict(
                 chan_point=channel_point,
                 base_fee_msat=ch.local_base_fee,
                 fee_rate=(new_rate/1000000),
                 time_lock_delta=ch.local_cltv
-            ))
+            )
+            inbound_target = None
+            if ch.inbound_offset != 0:
+                balance = new_rate + ch.inbound_offset
+                inbound_target = -balance if balance > 0 else 0
+                inbound_base_fee = ch.local_inbound_base_fee if ch.local_inbound_base_fee else 0
+                policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
+            stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(**policy_kwargs))
             old_rate = ch.local_fee_rate
             ch.local_fee_rate = new_rate
             ch.fees_updated = datetime.now()
+            if inbound_target is not None:
+                old_inbound = ch.local_inbound_fee_rate if ch.local_inbound_fee_rate else 0
+                ch.local_inbound_fee_rate = inbound_target
+                ch.offset_updated = datetime.now()
             ch.save()
             Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting="Manual", old_value=old_rate, new_value=new_rate).save()
+            if inbound_target is not None and old_inbound != inbound_target:
+                InboundFeeLog(chan_id=ch.chan_id, peer_alias=ch.alias, setting='Fee Adj Offset', old_value=old_inbound, new_value=inbound_target).save()
             processed_siblings, updated_siblings = sync_peer_outbound_fee(ch, new_rate, stub=stub)
             processed.update(processed_siblings)
             updated += 1 + len(updated_siblings)
@@ -2790,12 +2803,25 @@ def update_channel(request):
             elif update_target == 1:
                 stub = lnrpc.LightningStub(lnd_connect())
                 channel_point = point(db_channel)
-                stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(target/1000000), time_lock_delta=db_channel.local_cltv))
+                policy_kwargs = dict(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(target/1000000), time_lock_delta=db_channel.local_cltv)
+                inbound_target = None
+                if db_channel.inbound_offset != 0:
+                    balance = target + db_channel.inbound_offset
+                    inbound_target = -balance if balance > 0 else 0
+                    inbound_base_fee = db_channel.local_inbound_base_fee if db_channel.local_inbound_base_fee else 0
+                    policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
+                stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(**policy_kwargs))
                 old_fee_rate = db_channel.local_fee_rate
                 db_channel.local_fee_rate = target
                 db_channel.fees_updated = datetime.now()
+                if inbound_target is not None:
+                    old_inbound = db_channel.local_inbound_fee_rate if db_channel.local_inbound_fee_rate else 0
+                    db_channel.local_inbound_fee_rate = inbound_target
+                    db_channel.offset_updated = datetime.now()
                 db_channel.save()
                 Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Manual"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
+                if inbound_target is not None and old_inbound != inbound_target:
+                    InboundFeeLog(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting='Fee Adj Offset', old_value=old_inbound, new_value=inbound_target).save()
                 _, updated_siblings = sync_peer_outbound_fee(db_channel, target, stub=stub)
                 if updated_siblings:
                     messages.info(request, f'Synced outbound fee with {len(updated_siblings)} sibling channel(s).')
@@ -3013,17 +3039,28 @@ def sync_peer_outbound_fee(channel: Channels, new_rate: int, stub=None):
             continue
 
         channel_point = point(sibling)
+        policy_kwargs = dict(
+            chan_point=channel_point,
+            base_fee_msat=sibling.local_base_fee,
+            fee_rate=(new_rate / 1000000),
+            time_lock_delta=sibling.local_cltv,
+        )
+        inbound_target = None
+        if sibling.inbound_offset != 0:
+            balance = new_rate + sibling.inbound_offset
+            inbound_target = -balance if balance > 0 else 0
+            inbound_base_fee = sibling.local_inbound_base_fee if sibling.local_inbound_base_fee else 0
+            policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
         client.UpdateChannelPolicy(
-            ln.PolicyUpdateRequest(
-                chan_point=channel_point,
-                base_fee_msat=sibling.local_base_fee,
-                fee_rate=(new_rate / 1000000),
-                time_lock_delta=sibling.local_cltv,
-            )
+            ln.PolicyUpdateRequest(**policy_kwargs)
         )
         old_rate = sibling.local_fee_rate
         sibling.local_fee_rate = new_rate
         sibling.fees_updated = datetime.now()
+        if inbound_target is not None:
+            old_inbound = sibling.local_inbound_fee_rate if sibling.local_inbound_fee_rate else 0
+            sibling.local_inbound_fee_rate = inbound_target
+            sibling.offset_updated = datetime.now()
         sibling.save()
         Autofees(
             chan_id=sibling.chan_id,
@@ -3032,6 +3069,8 @@ def sync_peer_outbound_fee(channel: Channels, new_rate: int, stub=None):
             old_value=old_rate,
             new_value=new_rate,
         ).save()
+        if inbound_target is not None and old_inbound != inbound_target:
+            InboundFeeLog(chan_id=sibling.chan_id, peer_alias=sibling.alias, setting='Fee Adj Offset', old_value=old_inbound, new_value=inbound_target).save()
         updated.add(sibling.chan_id)
 
     return processed, updated
