@@ -13,7 +13,7 @@ from os import environ
 from requests import get
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
-from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, Closures, Resolutions, PendingHTLCs, LocalSettings, FailedHTLCs, Autofees, InboundFeeLog, PendingChannels, HistFailedHTLC, PeerEvents
+from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, Closures, Resolutions, PendingHTLCs, LocalSettings, FailedHTLCs, Autofees, InboundFeeLog, PendingChannels, HistFailedHTLC, PeerEvents, RebalanceRoute
 from gui.node_cache import get_node_info_cached
 import af
 from jobs_emergency import emergency_forward_check
@@ -1012,6 +1012,92 @@ def agg_failed_htlcs():
     agg_htlcs(FailedHTLCs.objects.filter(timestamp__lte=time_filter, failure_detail=99)[:100], 'downstream')
     agg_htlcs(FailedHTLCs.objects.filter(timestamp__lte=time_filter).exclude(failure_detail__in=[6, 99])[:100], 'other')
 
+def probe_routes_job(stub):
+    if LocalSettings.objects.filter(key='QR-Enabled').exists():
+        if int(LocalSettings.objects.filter(key='QR-Enabled')[0].value) == 0:
+            return
+    else:
+        LocalSettings(key='QR-Enabled', value='0').save()
+        return
+    if LocalSettings.objects.filter(key='QR-UpdateHours').exists():
+        update_hours = float(LocalSettings.objects.filter(key='QR-UpdateHours')[0].value)
+    else:
+        LocalSettings(key='QR-UpdateHours', value='6').save()
+        update_hours = 6.0
+    if LocalSettings.objects.filter(key='QR-Amount').exists():
+        probe_amount = int(LocalSettings.objects.filter(key='QR-Amount')[0].value)
+    else:
+        LocalSettings(key='QR-Amount', value='50000').save()
+        probe_amount = 50000
+    if LocalSettings.objects.filter(key='QR-MaxPerTarget').exists():
+        max_per_target = int(LocalSettings.objects.filter(key='QR-MaxPerTarget')[0].value)
+    else:
+        LocalSettings(key='QR-MaxPerTarget', value='5').save()
+        max_per_target = 5
+    # Check if enough time has passed since last probe
+    last_probe = datetime.min
+    if LocalSettings.objects.filter(key='QR-LastProbe').exists():
+        try:
+            last_probe = datetime.fromisoformat(LocalSettings.objects.filter(key='QR-LastProbe')[0].value)
+        except Exception:
+            pass
+    if datetime.now() - last_probe < timedelta(hours=update_hours):
+        return
+    # Find auto-rebalance targets that need inbound
+    targets = Channels.objects.filter(is_open=True, auto_rebalance=True)
+    # Find outbound candidates (channels with enough liquidity to be sources)
+    outbound_cans = list(
+        Channels.objects.filter(is_open=True)
+        .exclude(auto_rebalance=True, ar_source=False)
+        .values_list('chan_id', flat=True)
+    )
+    probed_pubkeys = set()
+    total_new = 0
+    for ch in targets:
+        if ch.remote_pubkey in probed_pubkeys:
+            continue
+        probed_pubkeys.add(ch.remote_pubkey)
+        probed_for_target = 0
+        # Get outbound channels excluding channels to same peer
+        out_chans = [c for c in outbound_cans if c not in
+                     set(Channels.objects.filter(remote_pubkey=ch.remote_pubkey).values_list('chan_id', flat=True))]
+        for out_chan in out_chans[:max_per_target]:
+            try:
+                response = stub.QueryRoutes(
+                    ln.QueryRoutesRequest(
+                        pub_key=ch.remote_pubkey,
+                        amt=probe_amount,
+                        outgoing_chan_id=int(out_chan),
+                        use_mission_control=True,
+                    )
+                )
+            except Exception as e:
+                continue
+            if not response or not response.routes:
+                continue
+            for route in response.routes:
+                if not route.hops:
+                    continue
+                path = "-".join(h.pub_key for h in route.hops)
+                route_out_chan = str(route.hops[0].chan_id)
+                route_hex = route.SerializeToString().hex()
+                if len(route.hops) >= 2:
+                    cltv = route.hops[-1].expiry - route.hops[-2].expiry
+                else:
+                    cltv = 144
+                _, created = RebalanceRoute.objects.get_or_create(
+                    target_pubkey=ch.remote_pubkey,
+                    outgoing_chan_id=route_out_chan,
+                    route=path,
+                    defaults={"final_cltv_delta": cltv, "route_hex": route_hex},
+                )
+                if created:
+                    total_new += 1
+                    probed_for_target += 1
+    LocalSettings.objects.update_or_create(key='QR-LastProbe', defaults={'value': datetime.now().isoformat()})
+    if total_new:
+        print(f"{datetime.now().strftime('%c')} : [Data] : QueryRoutes probe discovered {total_new} new route(s) for {len(probed_pubkeys)} target(s)")
+
 def main():
     channel = get_shared_channel()
     while True:
@@ -1034,6 +1120,7 @@ def main():
             inbound_offsets(stub)
             auto_maxhtlc_job(stub)
             failed_htlc_boost_job(stub)
+            probe_routes_job(stub)
             agg_failed_htlcs()
         except Exception as e:
             print(f"{datetime.now().strftime('%c')} : [Data] : Error processing background data: {str(e)}")
