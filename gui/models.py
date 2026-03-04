@@ -512,6 +512,7 @@ class RebalanceRoute(models.Model):
     failure_count = models.IntegerField(default=0)
     last_success = models.DateTimeField(null=True, default=None)
     last_failure = models.DateTimeField(null=True, default=None)
+    last_fee_ppm = models.FloatField(null=True, default=None)
 
     @property
     def success_ratio(self) -> float:

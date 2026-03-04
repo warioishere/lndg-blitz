@@ -192,6 +192,11 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
             for nr in NodeReputation.objects.filter(pubkey__in=all_pubkeys):
                 rep_map[nr.pubkey] = calc_weighted_ratio(nr.success_count, nr.failure_count)
 
+        # Compute min fee among candidates for relative fee scoring
+        now = timezone.now()
+        fee_values = [r.last_fee_ppm for r in candidates if r.last_fee_ppm and r.last_fee_ppm > 0]
+        min_fee = min(fee_values) if fee_values else None
+
         scored = []
         for r in candidates:
             hops = route_hops[r.id]
@@ -200,7 +205,21 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
                 min_node_score = min(node_scores)
             else:
                 min_node_score = 0.5
-            adj_score = r.weighted_ratio * min_node_score
+
+            # Time-decay: half-life of 48 hours
+            if r.last_success:
+                hours_ago = (now - r.last_success).total_seconds() / 3600
+                time_factor = 2 ** (-hours_ago / 48)
+            else:
+                time_factor = 0.1
+
+            # Fee scoring: cheapest route gets 1.0, others proportionally less
+            if min_fee and r.last_fee_ppm and r.last_fee_ppm > 0:
+                fee_factor = min_fee / r.last_fee_ppm
+            else:
+                fee_factor = 0.5
+
+            adj_score = r.weighted_ratio * min_node_score * time_factor * fee_factor
             scored.append((r, adj_score, hops))
 
         # Step 2: Diversity-aware greedy selection
@@ -255,6 +274,8 @@ def update_route(pubkey, chan_id, route_hex, success=True):
             if not route_obj.last_success or now - route_obj.last_success > timedelta(minutes=5):
                 route_obj.success_count += 1
             route_obj.last_success = now
+            if parsed.total_amt_msat and parsed.total_fees_msat:
+                route_obj.last_fee_ppm = (parsed.total_fees_msat / parsed.total_amt_msat) * 1000000
         else:
             route_obj.failure_count += 1
             route_obj.last_failure = now
