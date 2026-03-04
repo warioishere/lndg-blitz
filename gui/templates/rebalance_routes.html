@@ -527,6 +527,7 @@ async function probeNow() {
       clearInterval(poll);
       probeLogData = res.results;
       renderProbeLogs();
+      routesLoaded = loadRoutes();
       await loadProbeData();
       btn.disabled = false;
       btn.innerText = 'Probe Now';
