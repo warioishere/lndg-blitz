@@ -909,30 +909,24 @@ def failed_htlc_boost_job(stub):
     except:
         lowliq_limit = 5
 
-    # In curve mode, use AF-Target as the threshold instead of lowliq_limit
+    # In curve mode, use per-channel ar_in_target instead of global lowliq_limit
     curve_mode = False
     if LocalSettings.objects.filter(key='AF-CurveMode').exists():
         curve_mode = LocalSettings.objects.filter(key='AF-CurveMode').first().value == '1'
-    if curve_mode:
-        try:
-            liq_threshold = int(LocalSettings.objects.filter(key='AF-Target').first().value) if LocalSettings.objects.filter(key='AF-Target').exists() else 50
-        except:
-            liq_threshold = 50
-    else:
-        liq_threshold = lowliq_limit
 
     # If boost disabled, skip
     if boost_amount <= 0:
         return
 
-    # Get channels below liquidity threshold
+    # Get channels
     channels = Channels.objects.filter(is_open=True)
 
     for ch in channels:
         # Calculate liquidity percentage
         local_percent = (ch.local_balance + ch.pending_outbound) * 100 / ch.capacity if ch.capacity else 0
 
-        # Only process channels below threshold
+        # Only process channels below target: per-channel iTarget in curve mode, global lowliq in legacy
+        liq_threshold = (100 - ch.ar_in_target) if curve_mode else lowliq_limit
         if local_percent > liq_threshold:
             continue
 

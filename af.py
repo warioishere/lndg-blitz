@@ -68,7 +68,6 @@ def main(channels):
     curve_mode = get_local_setting('AF-CurveMode', '1', str) == '1'
     intensity = get_local_setting('AF-Intensity', 50, int)
     exponent = get_local_setting('AF-Exponent', 2.0, float)
-    target = get_local_setting('AF-Target', 50, int)
     flow_weight = get_local_setting('AF-FlowWeight', 0.5, float)
     inbound_intensity = get_local_setting('AF-InboundIntensity', 20, int)
     MAX_NET_FLOW = 3
@@ -257,6 +256,9 @@ def main(channels):
         (group_df['total_amt_routed_out_7day'] - group_df['total_amt_routed_in_7day']) / group_df['total_capacity']
     ).where(group_df['total_capacity'] > 0, 0)
 
+    # Per-peer outbound target derived from min ar_in_target across peer's channels
+    group_df['peer_out_target'] = 100 - channels_df.groupby('remote_pubkey')['ar_in_target'].min().fillna(90).astype(int)
+
     # Define inbound adjustment calculation function
     HIGH_FLOW_FACTOR = 0.25
 
@@ -268,7 +270,8 @@ def main(channels):
         return int(val)
 
     def compute_curve_outbound_adjustment(row):
-        deviation = (target - row['out_percent']) / 100.0
+        ch_target = 100 - row.get('ar_in_target', 90)
+        deviation = (ch_target - row['out_percent']) / 100.0
         sign = 1 if deviation > 0 else (-1 if deviation < 0 else 0)
         adj = intensity * sign * abs(deviation) ** exponent
         # Suppress fee increases when peer oRate is too high (unprofitable to rebalance)
@@ -284,7 +287,8 @@ def main(channels):
         return int(round(max(-max_step, min(max_step, adj))))
 
     def compute_curve_inbound_adjustment(row):
-        deviation = (target - row['overall_out_percent']) / 100.0
+        peer_tgt = row.get('peer_out_target', 10)
+        deviation = (peer_tgt - row['overall_out_percent']) / 100.0
         sign = 1 if deviation > 0 else (-1 if deviation < 0 else 0)
         adj = inbound_intensity * sign * abs(deviation) ** exponent
         return int(round(max(-max_step, min(max_step, adj))))
