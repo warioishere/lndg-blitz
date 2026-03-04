@@ -6,7 +6,7 @@
       <div class="w3-row-padding w3-container">
         {% for sett in settings %}
         {% if sett.form_id != 'update_channels' %}
-        <div class="w3-quarter w3-container w3-row">
+        <div class="w3-quarter w3-container w3-row{% if sett.css_class %} {{sett.css_class}}{% endif %}">
           <label for="{{sett.form_id}}" class="w3-col" title="{{ sett.title }}">{{ sett.label }}</label>
           {% if sett.min == 0 and sett.max == 1 %}
           <select style="height:27px" class="w3-col" name="{{sett.form_id}}" id="{{sett.form_id}}">
@@ -77,6 +77,21 @@
       }
       ambInput.addEventListener('input', showMinutesAmb);
       showMinutesAmb();
+    }
+    // Toggle curve vs legacy AF settings visibility
+    const curveToggle = document.getElementById('af_curve_mode');
+    if (curveToggle) {
+      function toggleCurveSettings() {
+        const isCurve = curveToggle.value === '1';
+        document.querySelectorAll('.af-curve-setting').forEach(function(el) {
+          el.style.display = isCurve ? '' : 'none';
+        });
+        document.querySelectorAll('.af-legacy-setting').forEach(function(el) {
+          el.style.display = isCurve ? 'none' : '';
+        });
+      }
+      curveToggle.addEventListener('change', toggleCurveSettings);
+      toggleCurveSettings();
     }
   });
 </script>

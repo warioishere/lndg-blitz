@@ -2570,25 +2570,33 @@ def get_local_settings(*prefixes):
     if 'AF-' in prefixes:
         form.append({'unit': '', 'form_id': 'af_enabled', 'value': 0, 'label': 'Autofee', 'id': 'AF-Enabled', 'title': 'Enable/Disable All Auto-fee functionality', 'min':0, 'max':1})
         form.append({'unit': '', 'form_id': 'af_inbound', 'value': 0, 'label': 'Inbound Fees', 'id': 'AF-InboundFees', 'title': 'Enable/Disable Inbound Auto-fee functionality', 'min':0, 'max':1})
+        form.append({'unit': '', 'form_id': 'af_curve_mode', 'value': 1, 'label': 'Curve Mode', 'id': 'AF-CurveMode', 'title': 'Switch between smooth curve (On) and legacy zone-based (Off) fee adjustments', 'min':0, 'max':1})
         form.append({'unit': 'ppm', 'form_id': 'af_maxRate', 'value': 2500, 'label': 'AF Max Rate', 'id': 'AF-MaxRate', 'title': 'Maximum Rate that can be adjusted to. Default 2500', 'min':0})
         form.append({'unit': 'ppm', 'form_id': 'af_minRate', 'value': 0, 'label': 'AF Min Rate', 'id': 'AF-MinRate', 'title': 'Minimum Rate that can be adjusted to. Default 0', 'min':0, 'max':5000})
         form.append({'unit': 'ppm', 'form_id': 'af_increment', 'value': 5, 'label': 'AF Increment', 'id': 'AF-Increment', 'title': 'Target fee rate will always be a multiple of this value. Default 5', 'min':1, 'max':100})
-        form.append({'unit': 'x', 'form_id': 'af_multiplier', 'value': 5, 'label': 'AF Multiplier', 'id': 'AF-Multiplier', 'title': 'Multiplier to be applied to Auto-Fee adjustments. Default 5', 'min':1, 'max':100})
-        form.append({'unit': 'x', 'form_id': 'af_flow_scale', 'value': 1.0, 'label': 'Flow Scale', 'id': 'AF-FlowScale', 'title': 'Scale flow-based adjustments; 0 disables flow factor', 'min':0})
-        form.append({'unit': 'ppm', 'form_id': 'af_maxstep', 'value': 100, 'label': 'Max Step', 'id': 'AF-MaxStep', 'title': 'Maximum change allowed per update', 'min':1})
-        form.append({'unit': 'min', 'form_id': 'af_failedhtlcboost_interval', 'value': 15, 'label': 'HTLC Boost Interval', 'id': 'AF-HTLCBoostIntvl', 'title': 'Time window in minutes to count failed HTLCs for boost mechanism. Default 15', 'min':1, 'max':1440})
-        form.append({'unit': '', 'form_id': 'af_failedHTLCs', 'value': 5, 'label': 'Failed HTLCs', 'id': 'AF-FailedHTLCs', 'title': 'Number of failed HTLCs within interval to trigger boost when liq below AF-LowLiqLimit. Default 5', 'min':1, 'max':100})
-        form.append({'unit': 'ppm', 'form_id': 'af_failedhtlcboost', 'value': 0, 'label': 'Failed HTLC Boost', 'id': 'AF-FailedHTLCBoost', 'title': 'Fixed fee increase in ppm when HTLC threshold is met. 0 disables this feature. Default 0', 'min':0, 'max':5000})
         form.append({'unit': 'hours', 'form_id': 'af_updateHours', 'value': 24, 'label': 'AF Update', 'id': 'AF-UpdateHours', 'title': 'Minimum number of hours between fee updates for an individual channel. Default 24', 'min':0.01, 'max':100})
-        form.append({'unit': '%', 'form_id': 'af_lowliq', 'value': 15, 'label': 'AF LowLiq', 'id': 'AF-LowLiqLimit', 'title': 'Limit for running low liq AF rules (increase when failed htlcs + no inbound). Default 15', 'min':0, 'max':100})
-        form.append({'unit': 'x', 'form_id': 'af_lowliqboost', 'value': 1, 'label': 'AF LowLiq Boost', 'id': 'AF-LowLiqBoost', 'title': 'Multiplier for extra fee bump when liquidity is below AF-LowLiqLimit. Default 1', 'min':0, 'max':10})
-        form.append({'unit': '', 'form_id': 'af_lowliqboostar', 'value': 0, 'label': 'AF Boost AR Only', 'id': 'AF-LowLiqBoostAR', 'title': 'Apply boost only to channels with Auto-Rebalance enabled; Off disables the boost', 'min':0, 'max':1})
+        # Curve mode settings
+        form.append({'unit': 'ppm', 'form_id': 'af_intensity', 'value': 50, 'label': 'Intensity', 'id': 'AF-Intensity', 'title': 'Max ppm adjustment per cycle at worst imbalance. Default 50', 'min':1, 'max':500, 'css_class': 'af-curve-setting'})
+        form.append({'unit': '', 'form_id': 'af_exponent', 'value': 2.0, 'label': 'Exponent', 'id': 'AF-Exponent', 'title': 'Curve shape: 1=linear, 2=quadratic, 3=cubic. Default 2.0', 'min':0.5, 'max':5, 'css_class': 'af-curve-setting'})
+        form.append({'unit': '%', 'form_id': 'af_target', 'value': 50, 'label': 'Target Balance', 'id': 'AF-Target', 'title': 'Desired outbound balance percentage. Default 50', 'min':1, 'max':99, 'css_class': 'af-curve-setting'})
+        form.append({'unit': 'x', 'form_id': 'af_flow_weight', 'value': 0.5, 'label': 'Flow Weight', 'id': 'AF-FlowWeight', 'title': 'Flow amplification factor; 0 disables flow modifier. Default 0.5', 'min':0, 'max':3, 'css_class': 'af-curve-setting'})
+        form.append({'unit': 'ppm', 'form_id': 'af_inbound_intensity', 'value': 20, 'label': 'Inbound Intensity', 'id': 'AF-InboundIntensity', 'title': 'Max inbound ppm adjustment per cycle at worst imbalance. Default 20', 'min':1, 'max':500, 'css_class': 'af-curve-setting'})
+        # Legacy mode settings
+        form.append({'unit': 'x', 'form_id': 'af_multiplier', 'value': 5, 'label': 'AF Multiplier', 'id': 'AF-Multiplier', 'title': 'Multiplier to be applied to Auto-Fee adjustments. Default 5', 'min':1, 'max':100, 'css_class': 'af-legacy-setting'})
+        form.append({'unit': 'x', 'form_id': 'af_flow_scale', 'value': 1.0, 'label': 'Flow Scale', 'id': 'AF-FlowScale', 'title': 'Scale flow-based adjustments; 0 disables flow factor', 'min':0, 'css_class': 'af-legacy-setting'})
+        form.append({'unit': 'ppm', 'form_id': 'af_maxstep', 'value': 100, 'label': 'Max Step', 'id': 'AF-MaxStep', 'title': 'Maximum change allowed per update', 'min':1, 'css_class': 'af-legacy-setting'})
+        form.append({'unit': 'min', 'form_id': 'af_failedhtlcboost_interval', 'value': 15, 'label': 'HTLC Boost Interval', 'id': 'AF-HTLCBoostIntvl', 'title': 'Time window in minutes to count failed HTLCs for boost mechanism. Default 15', 'min':1, 'max':1440})
+        form.append({'unit': '', 'form_id': 'af_failedHTLCs', 'value': 5, 'label': 'Failed HTLCs', 'id': 'AF-FailedHTLCs', 'title': 'Number of failed HTLCs within interval to trigger boost. Default 5', 'min':1, 'max':100})
+        form.append({'unit': 'ppm', 'form_id': 'af_failedhtlcboost', 'value': 0, 'label': 'Failed HTLC Boost', 'id': 'AF-FailedHTLCBoost', 'title': 'Fixed fee increase in ppm when HTLC threshold is met. 0 disables this feature. Default 0', 'min':0, 'max':5000})
+        form.append({'unit': '%', 'form_id': 'af_lowliq', 'value': 15, 'label': 'AF LowLiq', 'id': 'AF-LowLiqLimit', 'title': 'Limit for running low liq AF rules (increase when failed htlcs + no inbound). Default 15', 'min':0, 'max':100, 'css_class': 'af-legacy-setting'})
+        form.append({'unit': 'x', 'form_id': 'af_lowliqboost', 'value': 1, 'label': 'AF LowLiq Boost', 'id': 'AF-LowLiqBoost', 'title': 'Multiplier for extra fee bump when liquidity is below AF-LowLiqLimit. Default 1', 'min':0, 'max':10, 'css_class': 'af-legacy-setting'})
+        form.append({'unit': '', 'form_id': 'af_lowliqboostar', 'value': 0, 'label': 'AF Boost AR Only', 'id': 'AF-LowLiqBoostAR', 'title': 'Apply boost only to channels with Auto-Rebalance enabled; Off disables the boost', 'min':0, 'max':1, 'css_class': 'af-legacy-setting'})
         form.append({'unit': 'ppm', 'form_id': 'af_peer_rate_limit', 'value': 0, 'label': 'Peer oRate Limit', 'id': 'AF-PeerRateLimit', 'title': 'Only raise fees if peer oRate below this limit; 0 disables', 'min':0, 'max':5000})
         form.append({'unit': '', 'form_id': 'af_peer_rate_check', 'value': 0, 'label': 'Peer Rate Check', 'id': 'AF-PeerRateCheck', 'title': 'Enable/Disable peer oRate limit check', 'min':0, 'max':1})
         form.append({'unit': '', 'form_id': 'af_bypass_peer_rate_on_htlc', 'value': 0, 'label': 'Bypass PeerRate on HTLC', 'id': 'AF-BypassPeerHTLC', 'title': 'When enabled, channels with failed HTLCs meeting the boost threshold bypass the peer rate check (allows fee increases despite peer high oRate)', 'min':0, 'max':1})
-        form.append({'unit': '%', 'form_id': 'af_excess', 'value': 95, 'label': 'AF Excess', 'id': 'AF-ExcessLimit', 'title': 'Limit for running excess liq AF rules (decrease for stagnant channels and those with assisting revenues). Default 95', 'min':0, 'max':100})
-        form.append({'unit': 'x', 'form_id': 'af_excessboost', 'value': 1, 'label': 'AF Excess Boost', 'id': 'AF-ExcessBoost', 'title': 'Multiplier for extra fee drop when liquidity exceeds AF-ExcessLimit. Default 1', 'min':0, 'max':10})
-        form.append({'unit': '', 'form_id': 'af_excessboost_on', 'value': 0, 'label': 'Excess Boost', 'id': 'AF-ExcessBoostOn', 'title': 'Enable/Disable extra decrease for excess liquidity', 'min':0, 'max':1})
+        form.append({'unit': '%', 'form_id': 'af_excess', 'value': 95, 'label': 'AF Excess', 'id': 'AF-ExcessLimit', 'title': 'Limit for running excess liq AF rules (decrease for stagnant channels and those with assisting revenues). Default 95', 'min':0, 'max':100, 'css_class': 'af-legacy-setting'})
+        form.append({'unit': 'x', 'form_id': 'af_excessboost', 'value': 1, 'label': 'AF Excess Boost', 'id': 'AF-ExcessBoost', 'title': 'Multiplier for extra fee drop when liquidity exceeds AF-ExcessLimit. Default 1', 'min':0, 'max':10, 'css_class': 'af-legacy-setting'})
+        form.append({'unit': '', 'form_id': 'af_excessboost_on', 'value': 0, 'label': 'Excess Boost', 'id': 'AF-ExcessBoostOn', 'title': 'Enable/Disable extra decrease for excess liquidity', 'min':0, 'max':1, 'css_class': 'af-legacy-setting'})
     if 'FLP-' in prefixes:
         form.append({'unit': '', 'form_id': 'update_channels', 'id': 'update_channels'})
         form.append({'unit': '', 'form_id': 'flp_enabled', 'value': 0, 'label': 'FLP Enabled', 'id': 'FLP-Enabled', 'title': 'Enable/Disable fee limit protection', 'min':0, 'max':1})
@@ -2653,16 +2661,22 @@ def update_settings(request):
                     #AF
                     {'form_id': 'af_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-Enabled'},
                     {'form_id': 'af_inbound', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-InboundFees'},
+                    {'form_id': 'af_curve_mode', 'value': 1, 'parse': lambda x: int(x),'id': 'AF-CurveMode'},
                     {'form_id': 'af_maxRate', 'value': 2500, 'parse': lambda x: int(x),'id': 'AF-MaxRate'},
                     {'form_id': 'af_minRate', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-MinRate'},
                     {'form_id': 'af_increment', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-Increment'},
-                     {'form_id': 'af_multiplier', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-Multiplier'},
-                     {'form_id': 'af_flow_scale', 'value': 1.0, 'parse': lambda x: float(x),'id': 'AF-FlowScale'},
-                     {'form_id': 'af_maxstep', 'value': 100, 'parse': lambda x: int(x),'id': 'AF-MaxStep'},
+                    {'form_id': 'af_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'AF-UpdateHours'},
+                    {'form_id': 'af_intensity', 'value': 50, 'parse': lambda x: int(x),'id': 'AF-Intensity'},
+                    {'form_id': 'af_exponent', 'value': 2.0, 'parse': lambda x: float(x),'id': 'AF-Exponent'},
+                    {'form_id': 'af_target', 'value': 50, 'parse': lambda x: int(x),'id': 'AF-Target'},
+                    {'form_id': 'af_flow_weight', 'value': 0.5, 'parse': lambda x: float(x),'id': 'AF-FlowWeight'},
+                    {'form_id': 'af_inbound_intensity', 'value': 20, 'parse': lambda x: int(x),'id': 'AF-InboundIntensity'},
+                    {'form_id': 'af_multiplier', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-Multiplier'},
+                    {'form_id': 'af_flow_scale', 'value': 1.0, 'parse': lambda x: float(x),'id': 'AF-FlowScale'},
+                    {'form_id': 'af_maxstep', 'value': 100, 'parse': lambda x: int(x),'id': 'AF-MaxStep'},
                     {'form_id': 'af_failedhtlcboost_interval', 'value': 15, 'parse': lambda x: int(x),'id': 'AF-HTLCBoostIntvl'},
                     {'form_id': 'af_failedHTLCs', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-FailedHTLCs'},
                     {'form_id': 'af_failedhtlcboost', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-FailedHTLCBoost'},
-                    {'form_id': 'af_updateHours', 'value': 24, 'parse': lambda x: float(x),'id': 'AF-UpdateHours'},
                     {'form_id': 'af_lowliq', 'value': 15, 'parse': lambda x: int(x),'id': 'AF-LowLiqLimit'},
                     {'form_id': 'af_lowliqboost', 'value': 1, 'parse': lambda x: float(x),'id': 'AF-LowLiqBoost'},
                     {'form_id': 'af_lowliqboostar', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-LowLiqBoostAR'},

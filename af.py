@@ -56,6 +56,21 @@ def main(channels):
         bypass_peer_rate_on_htlc = False
     flow_scale = get_local_setting('AF-FlowScale', 1.0, float)
     max_step = get_local_setting('AF-MaxStep', 100, int)
+    # Auto-detect: default CurveMode to 0 if user has customized legacy-only settings
+    if not LocalSettings.objects.filter(key='AF-CurveMode').exists():
+        legacy_keys = [
+            'AF-Multiplier', 'AF-FlowScale', 'AF-MaxStep', 'AF-LowLiqLimit',
+            'AF-ExcessLimit', 'AF-LowLiqBoost', 'AF-LowLiqBoostAR', 'AF-ExcessBoost',
+            'AF-ExcessBoostOn',
+        ]
+        if LocalSettings.objects.filter(key__in=legacy_keys).exists():
+            LocalSettings(key='AF-CurveMode', value='0').save()
+    curve_mode = get_local_setting('AF-CurveMode', '1', str) == '1'
+    intensity = get_local_setting('AF-Intensity', 50, int)
+    exponent = get_local_setting('AF-Exponent', 2.0, float)
+    target = get_local_setting('AF-Target', 50, int)
+    flow_weight = get_local_setting('AF-FlowWeight', 0.5, float)
+    inbound_intensity = get_local_setting('AF-InboundIntensity', 20, int)
     MAX_NET_FLOW = 3
 
     def clamp_flow(val):
@@ -252,6 +267,28 @@ def main(channels):
             return -max_step
         return int(val)
 
+    def compute_curve_outbound_adjustment(row):
+        deviation = (target - row['out_percent']) / 100.0
+        sign = 1 if deviation > 0 else (-1 if deviation < 0 else 0)
+        adj = intensity * sign * abs(deviation) ** exponent
+        # Suppress fee increases when peer oRate is too high (unprofitable to rebalance)
+        if peer_rate_check and peer_rate_limit > 0 and adj > 0:
+            if row.get('remote_fee_rate', 0) >= peer_rate_limit:
+                return 0
+        if flow_weight > 0 and row['net_routed_7day'] != 0:
+            net_flow_ratio = row['net_routed_7day'] / MAX_NET_FLOW
+            net_flow_ratio = max(-1.0, min(1.0, net_flow_ratio))
+            # Amplify when flow direction matches adjustment direction
+            if (adj > 0 and net_flow_ratio > 0) or (adj < 0 and net_flow_ratio < 0):
+                adj *= (1 + flow_weight * abs(net_flow_ratio))
+        return int(round(max(-max_step, min(max_step, adj))))
+
+    def compute_curve_inbound_adjustment(row):
+        deviation = (target - row['overall_out_percent']) / 100.0
+        sign = 1 if deviation > 0 else (-1 if deviation < 0 else 0)
+        adj = inbound_intensity * sign * abs(deviation) ** exponent
+        return int(round(max(-max_step, min(max_step, adj))))
+
     def compute_inbound_adjustment(row):
         if row['overall_out_percent'] <= lowliq_limit:
             adj = 0
@@ -278,7 +315,10 @@ def main(channels):
                 adj = 0
         return clamp_step(adj)
 
-    group_df['inbound_adjustment'] = group_df.apply(compute_inbound_adjustment, axis=1)
+    if curve_mode:
+        group_df['inbound_adjustment'] = group_df.apply(compute_curve_inbound_adjustment, axis=1)
+    else:
+        group_df['inbound_adjustment'] = group_df.apply(compute_inbound_adjustment, axis=1)
 
     # Merge peer metrics back onto channels_df
     merge_cols = [
@@ -363,7 +403,10 @@ def main(channels):
                 adj = 0
             return clamp_step(adj)
 
-    channels_df['adjustment'] = channels_df.apply(compute_outbound_adjustment, axis=1)
+    if curve_mode:
+        channels_df['adjustment'] = channels_df.apply(compute_curve_outbound_adjustment, axis=1)
+    else:
+        channels_df['adjustment'] = channels_df.apply(compute_outbound_adjustment, axis=1)
 
     # Compute new outbound rates
     channels_df['new_rate'] = channels_df['local_fee_rate'] + channels_df['adjustment']

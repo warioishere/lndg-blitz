@@ -754,6 +754,15 @@ def inbound_offsets(stub):
     if float(version[:4]) < 0.18:
         return
     channels = Channels.objects.filter(is_open=True).exclude(inbound_offset=0)
+    # When curve mode handles inbound fees, skip channels managed by autofees
+    curve_mode = False
+    af_inbound = False
+    if LocalSettings.objects.filter(key='AF-CurveMode').exists():
+        curve_mode = LocalSettings.objects.filter(key='AF-CurveMode')[0].value == '1'
+    if LocalSettings.objects.filter(key='AF-InboundFees').exists():
+        af_inbound = LocalSettings.objects.filter(key='AF-InboundFees')[0].value == '1'
+    if curve_mode and af_inbound:
+        channels = channels.filter(auto_fees=False)
     for ch in channels:
         if not ch.offset_updated or ch.offset_updated < threshold:
             balance = ch.local_fee_rate + ch.inbound_offset
@@ -900,19 +909,31 @@ def failed_htlc_boost_job(stub):
     except:
         lowliq_limit = 5
 
+    # In curve mode, use AF-Target as the threshold instead of lowliq_limit
+    curve_mode = False
+    if LocalSettings.objects.filter(key='AF-CurveMode').exists():
+        curve_mode = LocalSettings.objects.filter(key='AF-CurveMode').first().value == '1'
+    if curve_mode:
+        try:
+            liq_threshold = int(LocalSettings.objects.filter(key='AF-Target').first().value) if LocalSettings.objects.filter(key='AF-Target').exists() else 50
+        except:
+            liq_threshold = 50
+    else:
+        liq_threshold = lowliq_limit
+
     # If boost disabled, skip
     if boost_amount <= 0:
         return
 
-    # Get channels below liquidity limit
+    # Get channels below liquidity threshold
     channels = Channels.objects.filter(is_open=True)
 
     for ch in channels:
         # Calculate liquidity percentage
         local_percent = (ch.local_balance + ch.pending_outbound) * 100 / ch.capacity if ch.capacity else 0
 
-        # Only process channels below liquidity limit
-        if local_percent > lowliq_limit:
+        # Only process channels below threshold
+        if local_percent > liq_threshold:
             continue
 
         # Check if we should run the check: only every AF-HTLCBoostIntvl minutes
