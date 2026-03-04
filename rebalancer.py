@@ -322,7 +322,13 @@ def purge_stale_routes():
         if get_local_setting('RR-CollectRoutes', '1', str) == '0':
             return
         cutoff = timezone.now() - timedelta(days=7)
-        RebalanceRoute.objects.filter(Q(last_success__lt=cutoff) | Q(last_success__isnull=True)).delete()
+        # Delete tested routes with no recent success, but keep untested
+        # probed routes so they get a chance to be tried first
+        RebalanceRoute.objects.filter(
+            Q(last_success__lt=cutoff) | Q(last_success__isnull=True)
+        ).exclude(
+            success_count=0, failure_count=0
+        ).delete()
         rep_cutoff = timezone.now() - timedelta(days=14)
         NodeReputation.objects.filter(
             Q(last_success__lt=rep_cutoff) | Q(last_success__isnull=True),
