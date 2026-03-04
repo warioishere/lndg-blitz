@@ -3493,7 +3493,7 @@ class NodeReputationViewSet(viewsets.ReadOnlyModelViewSet):
 
 class ProbeLogViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
-    queryset = ProbeLog.objects.all()[:50]
+    queryset = ProbeLog.objects.all()
     serializer_class = ProbeLogSerializer
 
 class FailedHTLCFilter(FilterSet):

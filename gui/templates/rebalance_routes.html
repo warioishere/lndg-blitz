@@ -245,6 +245,7 @@ function ageColor(dateStr) {
 
 let routesData = [];
 let reputationData = [];
+let routesLoaded;
 
 async function loadRoutes() {
   const res = await GET('rebalanceroutes', {data:{}});
@@ -386,6 +387,7 @@ async function loadProbeData() {
     byId('probe-next').innerText = enabled ? 'pending' : '---';
   }
 
+  await routesLoaded;
   updateProbeResults();
   loadProbeLogs();
 }
@@ -503,7 +505,7 @@ async function deleteSelected() {
 
 document.addEventListener('DOMContentLoaded', () => {
   restoreTab();
-  loadRoutes();
+  routesLoaded = loadRoutes();
   loadReputation();
   loadProbeData();
 });
