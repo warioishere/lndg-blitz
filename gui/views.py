@@ -2085,7 +2085,6 @@ def rebalance_routes(request):
             'use_saved_routes': _setting('RR-UseSavedRoutes', '1') != '0',
             'qr_enabled': _setting('QR-Enabled', '0') != '0',
             'qr_update_hours': _setting('QR-UpdateHours', '6'),
-            'qr_amount': _setting('QR-Amount', '10000'),
             'qr_max_per_target': _setting('QR-MaxPerTarget', '5'),
             'graph_links': graph_links(),
         }
@@ -3239,12 +3238,6 @@ def update_setting(request):
                 setting.value = target
                 setting.save()
                 messages.success(request, 'Probe interval updated to: ' + str(target) + 'h')
-            elif key == 'QR-Amount':
-                target = int(value)
-                setting, _ = LocalSettings.objects.get_or_create(key='QR-Amount', defaults={'value': target})
-                setting.value = target
-                setting.save()
-                messages.success(request, 'Probe amount updated to: ' + str(target) + ' sats')
             elif key == 'QR-MaxPerTarget':
                 target = int(value)
                 setting, _ = LocalSettings.objects.get_or_create(key='QR-MaxPerTarget', defaults={'value': target})

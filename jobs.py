@@ -1039,11 +1039,6 @@ def probe_routes_job(stub):
     else:
         LocalSettings(key='QR-UpdateHours', value='6').save()
         update_hours = 6.0
-    if LocalSettings.objects.filter(key='QR-Amount').exists():
-        probe_amount = int(LocalSettings.objects.filter(key='QR-Amount')[0].value)
-    else:
-        LocalSettings(key='QR-Amount', value='50000').save()
-        probe_amount = 50000
     if LocalSettings.objects.filter(key='QR-MaxPerTarget').exists():
         max_per_target = int(LocalSettings.objects.filter(key='QR-MaxPerTarget')[0].value)
     else:
@@ -1088,7 +1083,7 @@ def probe_routes_job(stub):
                 response = stub.QueryRoutes(
                     ln.QueryRoutesRequest(
                         pub_key=ch.remote_pubkey,
-                        amt=probe_amount,
+                        amt=ch.ar_amt_target,
                         outgoing_chan_id=int(out_chan),
                         use_mission_control=True,
                     )

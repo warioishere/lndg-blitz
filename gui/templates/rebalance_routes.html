@@ -73,7 +73,7 @@
             <tr><td>Last probe</td><td id="probe-last" class="w3-right-align">--</td></tr>
             <tr><td>Next probe due</td><td id="probe-next" class="w3-right-align">--</td></tr>
             <tr><td>Probe interval</td><td id="probe-interval" class="w3-right-align">--</td></tr>
-            <tr><td>Probe amount</td><td id="probe-amount" class="w3-right-align">--</td></tr>
+            <tr><td>Probe amount</td><td class="w3-right-align">per-channel</td></tr>
           </table>
         </div>
       </div>
@@ -190,13 +190,6 @@
             <label for="qr_update_hours"><b>Probe interval</b> (hours, 0.5-168):</label>
             <input class="w3-input w3-border" id="qr_update_hours" name="value" type="number" min="0.5" max="168" step="0.5" value="{{ qr_update_hours }}">
             <input type="hidden" name="key" value="QR-UpdateHours">
-            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
-          </form>
-          <form class="w3-margin-bottom" action="/update_setting/" method="post">
-            {% csrf_token %}
-            <label for="qr_amount"><b>Probe amount</b> (sats):</label>
-            <input class="w3-input w3-border" id="qr_amount" name="value" type="number" min="1" value="{{ qr_amount }}">
-            <input type="hidden" name="key" value="QR-Amount">
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
           </form>
           <form action="/update_setting/" method="post">
@@ -353,8 +346,6 @@ async function loadProbeData() {
   const enabled = probeSettings['QR-Enabled'] === '1';
   const lastProbeStr = probeSettings['QR-LastProbe'];
   const interval = parseFloat(probeSettings['QR-UpdateHours'] || '6');
-  const amount = probeSettings['QR-Amount'] || '10000';
-
   // Overview stat
   byId('stat-last-probe').innerText = lastProbeStr ? formatDate(lastProbeStr) : 'Never';
 
@@ -367,8 +358,6 @@ async function loadProbeData() {
   }
   byId('probe-last').innerText = lastProbeStr ? formatDate(lastProbeStr) : 'Never';
   byId('probe-interval').innerText = interval + 'h';
-  byId('probe-amount').innerText = parseInt(amount).toLocaleString() + ' sats';
-
   // Next probe due
   if (lastProbeStr && enabled) {
     const lastMs = new Date(lastProbeStr).getTime();
