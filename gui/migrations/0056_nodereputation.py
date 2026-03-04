@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('gui', '0049_localsettings_long_value'),
+        ('gui', '0055_channels_htlc_boost_checked'),
     ]
 
     operations = [
