@@ -206,20 +206,25 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
             else:
                 min_node_score = 0.5
 
-            # Time-decay: half-life of 48 hours
-            if r.last_success:
-                hours_ago = (now - r.last_success).total_seconds() / 3600
-                time_factor = 2 ** (-hours_ago / 48)
+            # Untested probed routes: give a baseline score so they get tried
+            is_untested = r.success_count == 0 and r.failure_count == 0
+            if is_untested:
+                adj_score = 0.25 * min_node_score
             else:
-                time_factor = 0.1
+                # Time-decay: half-life of 48 hours
+                if r.last_success:
+                    hours_ago = (now - r.last_success).total_seconds() / 3600
+                    time_factor = 2 ** (-hours_ago / 48)
+                else:
+                    time_factor = 0.1
 
-            # Fee scoring: cheapest route gets 1.0, others proportionally less
-            if min_fee and r.last_fee_ppm and r.last_fee_ppm > 0:
-                fee_factor = min_fee / r.last_fee_ppm
-            else:
-                fee_factor = 0.5
+                # Fee scoring: cheapest route gets 1.0, others proportionally less
+                if min_fee and r.last_fee_ppm and r.last_fee_ppm > 0:
+                    fee_factor = min_fee / r.last_fee_ppm
+                else:
+                    fee_factor = 0.5
 
-            adj_score = r.weighted_ratio * min_node_score * time_factor * fee_factor
+                adj_score = r.weighted_ratio * min_node_score * time_factor * fee_factor
             scored.append((r, adj_score, hops))
 
         # Step 2: Diversity-aware greedy selection
