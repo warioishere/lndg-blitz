@@ -88,6 +88,7 @@
         </div>
       </div>
     </div>
+    <button class="w3-button w3-blue w3-margin-bottom" id="probeNowBtn" onclick="probeNow()">Probe Now</button>
     <h4>Probe History</h4>
     <table class="w3-table-all w3-centered w3-hoverable">
       <thead>
@@ -501,6 +502,43 @@ async function deleteSelected() {
     const row = document.querySelector(`tr[data-id='${id}']`);
     if (row) row.remove();
   }
+}
+
+async function probeNow() {
+  const btn = byId('probeNowBtn');
+  btn.disabled = true;
+  btn.innerText = 'Probe triggered, waiting...';
+  btn.className = 'w3-button w3-grey w3-margin-bottom';
+  const token = document.getElementById('api').dataset.token;
+  const body = new URLSearchParams({key: 'QR-LastProbe', value: '2000-01-01T00:00:00'});
+  await fetch('/update_setting/', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': token},
+    body: body,
+  });
+  // Poll for new probe log (jobs loop runs every ~20s)
+  const prevCount = probeLogData.length;
+  const prevId = probeLogData.length > 0 ? probeLogData[0].id : 0;
+  let attempts = 0;
+  const poll = setInterval(async () => {
+    attempts++;
+    const res = await GET('probelogs', {data:{}});
+    if (res.results && res.results.length > 0 && res.results[0].id !== prevId) {
+      clearInterval(poll);
+      probeLogData = res.results;
+      renderProbeLogs();
+      await loadProbeData();
+      btn.disabled = false;
+      btn.innerText = 'Probe Now';
+      btn.className = 'w3-button w3-green w3-margin-bottom';
+      setTimeout(() => { btn.className = 'w3-button w3-blue w3-margin-bottom'; }, 2000);
+    } else if (attempts >= 15) {
+      clearInterval(poll);
+      btn.disabled = false;
+      btn.innerText = 'Probe Now';
+      btn.className = 'w3-button w3-blue w3-margin-bottom';
+    }
+  }, 5000);
 }
 
 document.addEventListener('DOMContentLoaded', () => {

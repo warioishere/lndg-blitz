@@ -3237,6 +3237,10 @@ def update_setting(request):
                 setting.value = target
                 setting.save()
                 messages.success(request, 'Max probes per target updated to: ' + str(target))
+            elif key == 'QR-LastProbe':
+                setting, _ = LocalSettings.objects.get_or_create(key='QR-LastProbe', defaults={'value': value})
+                setting.value = value
+                setting.save()
             else:
                 messages.error(request, 'Invalid Request. Please try again. [' + key +']')
         else:
