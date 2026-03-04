@@ -6,6 +6,7 @@
   <div class="w3-bar w3-border-bottom w3-margin-bottom">
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Overview')">Overview</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Routes')">Routes</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Probing')">Probing</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Reputation')">Node Reputation</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Settings')">Settings</button>
   </div>
@@ -58,6 +59,46 @@
         </tr>
       </thead>
       <tbody id="routesTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Probing Tab -->
+  <div id="Probing" class="tabcontent" style="display:none">
+    <div class="w3-row-padding">
+      <div class="w3-half w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Probe Status</h4>
+          <table class="w3-table">
+            <tr><td>Probing</td><td id="probe-status" class="w3-right-align">--</td></tr>
+            <tr><td>Last probe</td><td id="probe-last" class="w3-right-align">--</td></tr>
+            <tr><td>Next probe due</td><td id="probe-next" class="w3-right-align">--</td></tr>
+            <tr><td>Probe interval</td><td id="probe-interval" class="w3-right-align">--</td></tr>
+            <tr><td>Probe amount</td><td id="probe-amount" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="w3-half w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Probe Results</h4>
+          <table class="w3-table">
+            <tr><td>Routes discovered by probing</td><td id="probe-routes" class="w3-right-align">--</td></tr>
+            <tr><td>Unique targets probed</td><td id="probe-targets" class="w3-right-align">--</td></tr>
+            <tr><td>Probed routes success rate</td><td id="probe-success-rate" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+    <h4>Probed Routes by Target</h4>
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th>Target</th>
+          <th>Probed Routes</th>
+          <th>Tested Routes</th>
+          <th>Best Score</th>
+        </tr>
+      </thead>
+      <tbody id="probeTargetTable"></tbody>
     </table>
   </div>
 
@@ -165,7 +206,7 @@ function openTab(evt, name) {
 }
 
 function restoreTab() {
-  const valid = ['Overview', 'Routes', 'Reputation', 'Settings'];
+  const valid = ['Overview', 'Routes', 'Probing', 'Reputation', 'Settings'];
   const saved = localStorage.getItem('routes-tab');
   const tab = valid.includes(saved) ? saved : 'Overview';
   document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
@@ -283,13 +324,103 @@ function renderReputation() {
   });
 }
 
-async function loadLastProbe() {
-  const res = await GET('settings', {data:{key: 'QR-LastProbe'}});
-  if (res.results && res.results.length > 0) {
-    byId('stat-last-probe').innerText = formatDate(res.results[0].value);
+let probeSettings = {};
+
+async function loadProbeData() {
+  const res = await GET('settings', {data:{}});
+  if (!res.results) return;
+  res.results.forEach(s => { probeSettings[s.key] = s.value; });
+
+  const enabled = probeSettings['QR-Enabled'] === '1';
+  const lastProbeStr = probeSettings['QR-LastProbe'];
+  const interval = parseFloat(probeSettings['QR-UpdateHours'] || '6');
+  const amount = probeSettings['QR-Amount'] || '10000';
+
+  // Overview stat
+  byId('stat-last-probe').innerText = lastProbeStr ? formatDate(lastProbeStr) : 'Never';
+
+  // Probing tab status
+  const statusEl = byId('probe-status');
+  if (enabled) {
+    statusEl.innerHTML = '<span class="w3-tag w3-green">Enabled</span>';
   } else {
-    byId('stat-last-probe').innerText = 'Never';
+    statusEl.innerHTML = '<span class="w3-tag w3-red">Disabled</span>';
   }
+  byId('probe-last').innerText = lastProbeStr ? formatDate(lastProbeStr) : 'Never';
+  byId('probe-interval').innerText = interval + 'h';
+  byId('probe-amount').innerText = parseInt(amount).toLocaleString() + ' sats';
+
+  // Next probe due
+  if (lastProbeStr && enabled) {
+    const lastMs = new Date(lastProbeStr).getTime();
+    const nextMs = lastMs + interval * 3600000;
+    const nowMs = Date.now();
+    if (nextMs > nowMs) {
+      const mins = Math.round((nextMs - nowMs) / 60000);
+      if (mins < 60) {
+        byId('probe-next').innerText = 'in ' + mins + ' min';
+      } else {
+        byId('probe-next').innerText = 'in ' + (mins / 60).toFixed(1) + 'h';
+      }
+    } else {
+      byId('probe-next').innerText = 'due now';
+    }
+  } else {
+    byId('probe-next').innerText = enabled ? 'pending' : '---';
+  }
+
+  updateProbeResults();
+}
+
+function updateProbeResults() {
+  const probed = routesData.filter(r => r.success_count === 0 && r.failure_count === 0);
+  const tested = routesData.filter(r => r.success_count > 0 || r.failure_count > 0);
+  byId('probe-routes').innerText = probed.length;
+
+  // Unique targets from probed routes
+  const targetSet = new Set(probed.map(r => r.target_pubkey));
+  byId('probe-targets').innerText = targetSet.size;
+
+  // Success rate of routes that started as probed and got tested
+  if (tested.length > 0) {
+    const withSuccess = tested.filter(r => r.success_count > 0).length;
+    byId('probe-success-rate').innerText = (withSuccess / tested.length * 100).toFixed(1) + '%';
+  } else {
+    byId('probe-success-rate').innerText = '---';
+  }
+
+  // Per-target breakdown
+  const targets = {};
+  routesData.forEach(r => {
+    const key = r.target_pubkey;
+    if (!targets[key]) {
+      targets[key] = { alias: r.target_alias || key.substring(0, 20) + '...', pubkey: key, probed: 0, tested: 0, bestScore: 0 };
+    }
+    if (r.success_count === 0 && r.failure_count === 0) {
+      targets[key].probed++;
+    } else {
+      targets[key].tested++;
+    }
+    if (r.weighted_ratio > targets[key].bestScore) {
+      targets[key].bestScore = r.weighted_ratio;
+    }
+  });
+
+  const table = byId('probeTargetTable');
+  table.innerHTML = '';
+  const sorted = Object.values(targets).sort((a, b) => b.probed - a.probed);
+  sorted.forEach(t => {
+    const row = table.insertRow();
+    const nameCell = row.insertCell();
+    const link = document.createElement('a');
+    link.href = GRAPH_LINKS + '/node/' + t.pubkey;
+    link.target = '_blank';
+    link.innerText = t.alias;
+    nameCell.appendChild(link);
+    row.insertCell().innerText = t.probed;
+    row.insertCell().innerText = t.tested;
+    row.insertCell().innerText = (t.bestScore * 100).toFixed(1) + '%';
+  });
 }
 
 function updateOverview() {
@@ -324,7 +455,7 @@ document.addEventListener('DOMContentLoaded', () => {
   restoreTab();
   loadRoutes();
   loadReputation();
-  loadLastProbe();
+  loadProbeData();
 });
 </script>
 {% endblock %}
