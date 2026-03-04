@@ -4,14 +4,14 @@
 <div class="w3-container w3-padding-small">
   <h2>Saved Routes</h2>
   <div class="w3-bar w3-border-bottom w3-margin-bottom">
-    <button class="w3-bar-item w3-button tablink w3-blue" onclick="openTab(event,'Overview')">Overview</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Overview')">Overview</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Routes')">Routes</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Reputation')">Node Reputation</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Settings')">Settings</button>
   </div>
 
   <!-- Overview Tab -->
-  <div id="Overview" class="tabcontent">
+  <div id="Overview" class="tabcontent" style="display:none">
     <div class="w3-row-padding">
       <div class="w3-half w3-margin-bottom">
         <div class="w3-card w3-padding">
@@ -160,7 +160,21 @@ function openTab(evt, name) {
   document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.tablink').forEach(el => el.classList.remove('w3-blue'));
   document.getElementById(name).style.display = 'block';
-  evt.currentTarget.classList.add('w3-blue');
+  if (evt) evt.currentTarget.classList.add('w3-blue');
+  location.hash = name;
+}
+
+function restoreTab() {
+  const hash = location.hash.replace('#', '');
+  const valid = ['Overview', 'Routes', 'Reputation', 'Settings'];
+  const tab = valid.includes(hash) ? hash : 'Overview';
+  document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tablink').forEach(el => el.classList.remove('w3-blue'));
+  document.getElementById(tab).style.display = 'block';
+  document.querySelectorAll('.tablink').forEach(el => {
+    if (el.textContent.trim() === tab || (tab === 'Reputation' && el.textContent.trim() === 'Node Reputation'))
+      el.classList.add('w3-blue');
+  });
 }
 
 function ageColor(dateStr) {
@@ -307,6 +321,7 @@ async function deleteSelected() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  restoreTab();
   loadRoutes();
   loadReputation();
   loadLastProbe();
