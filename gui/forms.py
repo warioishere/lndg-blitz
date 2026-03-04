@@ -62,6 +62,7 @@ class AutoFeesForm(AutoRebalanceForm):
     af_intensity = forms.IntegerField(label='af_intensity', required=False)
     af_exponent = forms.FloatField(label='af_exponent', required=False)
     af_flow_weight = forms.FloatField(label='af_flow_weight', required=False)
+    af_downscale = forms.FloatField(label='af_downscale', required=False)
     af_inbound_intensity = forms.IntegerField(label='af_inbound_intensity', required=False)
     af_multiplier = forms.IntegerField(label='af_multiplier', required=False)
     af_flow_scale = forms.FloatField(label='af_flow_scale', required=False)

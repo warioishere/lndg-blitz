@@ -69,6 +69,7 @@ def main(channels):
     intensity = get_local_setting('AF-Intensity', 50, int)
     exponent = get_local_setting('AF-Exponent', 2.0, float)
     flow_weight = get_local_setting('AF-FlowWeight', 0.5, float)
+    downscale = get_local_setting('AF-DownScale', 1.0, float)
     inbound_intensity = get_local_setting('AF-InboundIntensity', 20, int)
     MAX_NET_FLOW = 3
 
@@ -278,6 +279,9 @@ def main(channels):
         if peer_rate_check and peer_rate_limit > 0 and adj > 0:
             if row.get('remote_fee_rate', 0) >= peer_rate_limit:
                 return 0
+        # Scale fee decreases
+        if adj < 0 and downscale != 1.0:
+            adj *= downscale
         if flow_weight > 0 and row['net_routed_7day'] != 0:
             net_flow_ratio = row['net_routed_7day'] / MAX_NET_FLOW
             net_flow_ratio = max(-1.0, min(1.0, net_flow_ratio))

@@ -2579,6 +2579,7 @@ def get_local_settings(*prefixes):
         form.append({'unit': 'ppm', 'form_id': 'af_intensity', 'value': 50, 'label': 'Intensity', 'id': 'AF-Intensity', 'title': 'Max ppm adjustment per cycle at worst imbalance. Default 50', 'min':1, 'max':500, 'css_class': 'af-curve-setting'})
         form.append({'unit': '', 'form_id': 'af_exponent', 'value': 2.0, 'label': 'Exponent', 'id': 'AF-Exponent', 'title': 'Curve shape: 1=linear, 2=quadratic, 3=cubic. Default 2.0', 'min':0.5, 'max':5, 'css_class': 'af-curve-setting'})
         form.append({'unit': 'x', 'form_id': 'af_flow_weight', 'value': 0.5, 'label': 'Flow Weight', 'id': 'AF-FlowWeight', 'title': 'Flow amplification factor; 0 disables flow modifier. Default 0.5', 'min':0, 'max':3, 'css_class': 'af-curve-setting'})
+        form.append({'unit': 'x', 'form_id': 'af_downscale', 'value': 1.0, 'label': 'DownScale', 'id': 'AF-DownScale', 'title': 'Multiplier for fee decreases only. >1 = faster drops, <1 = slower drops. Default 1.0', 'min':0.1, 'max':5, 'css_class': 'af-curve-setting'})
         form.append({'unit': 'ppm', 'form_id': 'af_inbound_intensity', 'value': 20, 'label': 'Inbound Intensity', 'id': 'AF-InboundIntensity', 'title': 'Max inbound ppm adjustment per cycle at worst imbalance. Default 20', 'min':1, 'max':500, 'css_class': 'af-curve-setting'})
         # Legacy mode settings
         form.append({'unit': 'x', 'form_id': 'af_multiplier', 'value': 5, 'label': 'AF Multiplier', 'id': 'AF-Multiplier', 'title': 'Multiplier to be applied to Auto-Fee adjustments. Default 5', 'min':1, 'max':100, 'css_class': 'af-legacy-setting'})
@@ -2668,6 +2669,7 @@ def update_settings(request):
                     {'form_id': 'af_intensity', 'value': 50, 'parse': lambda x: int(x),'id': 'AF-Intensity'},
                     {'form_id': 'af_exponent', 'value': 2.0, 'parse': lambda x: float(x),'id': 'AF-Exponent'},
                     {'form_id': 'af_flow_weight', 'value': 0.5, 'parse': lambda x: float(x),'id': 'AF-FlowWeight'},
+                    {'form_id': 'af_downscale', 'value': 1.0, 'parse': lambda x: float(x),'id': 'AF-DownScale'},
                     {'form_id': 'af_inbound_intensity', 'value': 20, 'parse': lambda x: int(x),'id': 'AF-InboundIntensity'},
                     {'form_id': 'af_multiplier', 'value': 5, 'parse': lambda x: int(x),'id': 'AF-Multiplier'},
                     {'form_id': 'af_flow_scale', 'value': 1.0, 'parse': lambda x: float(x),'id': 'AF-FlowScale'},
