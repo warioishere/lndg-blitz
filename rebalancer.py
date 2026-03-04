@@ -1,4 +1,4 @@
-import django, json, secrets, asyncio
+import django, json, secrets, asyncio, os
 from time import sleep
 from asgiref.sync import sync_to_async
 from django.db.models import Sum, F, Q, Case, When, Value, IntegerField
@@ -85,6 +85,50 @@ FAILURE_DETAIL_NAMES = {
     21: "MPP_IN_PROGRESS",
     22: "CIRCULAR_ROUTE",
 }
+
+PROBE_STEPS = 5
+MIN_PROBE_AMOUNT = 69420
+
+async def probe_route_amount(routerstub, hop_keys, outgoing_chan_id, cltv_delta, original_amount):
+    """Binary search for max routable amount using fake payments."""
+    good = 0
+    bad = original_amount
+    for step in range(PROBE_STEPS):
+        probe = (good + bad) // 2
+        if probe < MIN_PROBE_AMOUNT or bad - good < max(good // 20, 1000):
+            break
+        try:
+            build = await routerstub.BuildRoute(
+                lnr.BuildRouteRequest(
+                    outgoing_chan_id=int(outgoing_chan_id),
+                    amt_msat=probe * 1000,
+                    hop_pubkeys=hop_keys,
+                    final_cltv_delta=cltv_delta,
+                )
+            )
+        except Exception:
+            break
+        fake_hash = os.urandom(32)
+        try:
+            result = await routerstub.SendToRouteV2(
+                lnr.SendToRouteRequest(payment_hash=fake_hash, route=build.route),
+                timeout=30,
+            )
+        except Exception:
+            break
+        failure = getattr(result, "failure", None)
+        if not failure:
+            break
+        code = getattr(failure, "code", None)
+        if code == 1:      # INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS → can succeed
+            good = probe
+        elif code == 15:    # TEMPORARY_CHANNEL_FAILURE → too much
+            bad = probe
+        elif code == 12:    # FEE_INSUFFICIENT → retry (don't update bounds)
+            continue
+        else:
+            break
+    return good if good >= MIN_PROBE_AMOUNT else 0
 
 @sync_to_async
 def get_out_cans(rebalance, auto_rebalance_channels):
@@ -577,6 +621,47 @@ async def run_rebalancer(rebalance, worker):
                             rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, False
                         )
                         await update_node_reputations(rebuilt_hex, False, fsi)
+                        # Probe if target peer lacks liquidity
+                        total_hops = len(route_msg.hops)
+                        if failure and code_num == 15 and fsi is not None and fsi == total_hops - 2:
+                            probed = await probe_route_amount(
+                                routerstub, hop_keys, sr.outgoing_chan_id,
+                                cltv_delta, rebalance.value,
+                            )
+                            if probed > 0:
+                                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe found max {probed} sats (was {rebalance.value})")
+                                probe_invoice = stub.AddInvoice(ln.Invoice(value=probed, expiry=timeout))
+                                probe_build = await routerstub.BuildRoute(
+                                    lnr.BuildRouteRequest(
+                                        outgoing_chan_id=int(sr.outgoing_chan_id),
+                                        amt_msat=probed * 1000,
+                                        hop_pubkeys=hop_keys,
+                                        final_cltv_delta=cltv_delta,
+                                        payment_addr=probe_invoice.payment_addr,
+                                    )
+                                )
+                                scaled_fee_limit = fee_limit_msat * probed // rebalance.value
+                                if probe_build.route.total_fees_msat <= scaled_fee_limit:
+                                    probe_response = await routerstub.SendToRouteV2(
+                                        lnr.SendToRouteRequest(
+                                            payment_hash=probe_invoice.r_hash,
+                                            route=probe_build.route,
+                                        ),
+                                        timeout=timeout,
+                                    )
+                                    if probe_response.status == 1:  # SUCCEEDED
+                                        rebalance.value = probed
+                                        rebalance.status = 2
+                                        rebalance.payment_hash = probe_invoice.r_hash.hex()
+                                        fees_msat = probe_response.route.total_fees_msat or 0
+                                        rebalance.fees_paid = fees_msat / 1000
+                                        successful_out = probe_response.route.hops[0].chan_id
+                                        successful_in = probe_response.route.hops[-1].chan_id
+                                        rebuilt_hex = probe_build.route.SerializeToString().hex()
+                                        await update_route(rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, True)
+                                        await update_node_reputations(rebuilt_hex, True)
+                                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe payment succeeded: {probed} sats via {sr.outgoing_chan_id}")
+                                        break
                 except Exception as e:
                     print(
                         f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute failed via {sr.outgoing_chan_id} - {e}"
