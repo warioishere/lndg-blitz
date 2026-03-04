@@ -22,6 +22,7 @@ router.register(r'trades', views.TradeSalesViewSet)
 router.register(r'feelog', views.FeeLogViewSet)
 router.register(r'inboundfeelog', views.InboundFeeLogViewSet)
 router.register(r'rebalanceroutes', views.RebalanceRouteViewSet)
+router.register(r'nodereputation', views.NodeReputationViewSet)
 
 urlpatterns = [
     path('', views.home, name='home'),

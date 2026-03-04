@@ -3,106 +3,313 @@
 {% block content %}
 <div class="w3-container w3-padding-small">
   <h2>Saved Routes</h2>
-  <form class="w3-margin-bottom" action="/update_setting/" method="post">
-    {% csrf_token %}
-    <label for="route_limit">Routes to try:</label>
-    <input id="route_limit" name="value" type="number" min="1" max="50" value="{{ route_limit }}">
-    <input type="hidden" name="key" value="RR-RouteLimit">
-    <input type="submit" value="Save">
-  </form>
-  <form class="w3-margin-bottom" action="/update_setting/" method="post">
-    {% csrf_token %}
-    <label for="collect_routes">Collect Routes:</label>
-    <select id="collect_routes" name="value">
-      <option value="1" {% if collect_routes %}selected{% endif %}>On</option>
-      <option value="0" {% if not collect_routes %}selected{% endif %}>Off</option>
-    </select>
-    <input type="hidden" name="key" value="RR-CollectRoutes">
-    <input type="submit" value="Save">
-  </form>
-  <form class="w3-margin-bottom" action="/update_setting/" method="post">
-    {% csrf_token %}
-    <label for="use_saved">Use Saved Routes:</label>
-    <select id="use_saved" name="value">
-      <option value="1" {% if use_saved_routes %}selected{% endif %}>On</option>
-      <option value="0" {% if not use_saved_routes %}selected{% endif %}>Off</option>
-    </select>
-    <input type="hidden" name="key" value="RR-UseSavedRoutes">
-    <input type="submit" value="Save">
-  </form>
-  <button class="w3-button w3-red w3-margin-bottom" onclick="deleteSelected()">Delete Selected</button>
-  <table class="w3-table-all w3-centered w3-hoverable">
-    <thead>
-      <tr>
-        <th><input onclick="[...document.getElementsByClassName('route-select')].forEach(el => el.checked = this.checked)" class="w3-check" type="checkbox"/></th>
-        <th>Target Pubkey</th>
-        <th>Outgoing Chan ID</th>
-        <th>Success Ratio</th>
-        <th>Weighted Ratio</th>
-        <th>Successes</th>
-        <th>Failures</th>
-        <th>Last Success</th>
-        <th>Last Failure</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody id="routesTable"></tbody>
-  </table>
+  <div class="w3-bar w3-border-bottom w3-margin-bottom">
+    <button class="w3-bar-item w3-button tablink w3-blue" onclick="openTab(event,'Overview')">Overview</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Routes')">Routes</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Reputation')">Node Reputation</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Settings')">Settings</button>
+  </div>
+
+  <!-- Overview Tab -->
+  <div id="Overview" class="tabcontent">
+    <div class="w3-row-padding">
+      <div class="w3-half w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Routes</h4>
+          <table class="w3-table">
+            <tr><td>Total saved routes</td><td id="stat-total-routes" class="w3-right-align">--</td></tr>
+            <tr><td>Probed (untested)</td><td id="stat-probed" class="w3-right-align">--</td></tr>
+            <tr><td>Tested (with real data)</td><td id="stat-tested" class="w3-right-align">--</td></tr>
+            <tr><td>Added in last 24h</td><td id="stat-recent" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="w3-half w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Node Reputation</h4>
+          <table class="w3-table">
+            <tr><td>Tracked nodes</td><td id="stat-total-nodes" class="w3-right-align">--</td></tr>
+            <tr><td>Poor reputation (&lt;30%)</td><td id="stat-poor-nodes" class="w3-right-align">--</td></tr>
+            <tr><td>Last probe time</td><td id="stat-last-probe" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Routes Tab -->
+  <div id="Routes" class="tabcontent" style="display:none">
+    <button class="w3-button w3-red w3-margin-bottom" onclick="deleteSelected()">Delete Selected</button>
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th><input onclick="[...document.getElementsByClassName('route-select')].forEach(el => el.checked = this.checked)" class="w3-check" type="checkbox"/></th>
+          <th>Target Pubkey</th>
+          <th>Outgoing Chan ID</th>
+          <th>Fee PPM</th>
+          <th>Source</th>
+          <th>Success Ratio</th>
+          <th>Weighted Ratio</th>
+          <th>Successes</th>
+          <th>Failures</th>
+          <th>Last Success</th>
+          <th>Last Failure</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="routesTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Node Reputation Tab -->
+  <div id="Reputation" class="tabcontent" style="display:none">
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th>Node</th>
+          <th>Successes</th>
+          <th>Failures</th>
+          <th>Score</th>
+          <th>Last Success</th>
+          <th>Last Failure</th>
+        </tr>
+      </thead>
+      <tbody id="reputationTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Settings Tab -->
+  <div id="Settings" class="tabcontent" style="display:none">
+    <div class="w3-row-padding">
+      <div class="w3-half">
+        <div class="w3-card w3-padding w3-margin-bottom">
+          <h4>Route Settings</h4>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="route_limit"><b>Routes to try</b> (1-50):</label>
+            <input class="w3-input w3-border" id="route_limit" name="value" type="number" min="1" max="50" value="{{ route_limit }}">
+            <input type="hidden" name="key" value="RR-RouteLimit">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="collect_routes"><b>Collect Routes:</b></label>
+            <select class="w3-select w3-border" id="collect_routes" name="value">
+              <option value="1" {% if collect_routes %}selected{% endif %}>On</option>
+              <option value="0" {% if not collect_routes %}selected{% endif %}>Off</option>
+            </select>
+            <input type="hidden" name="key" value="RR-CollectRoutes">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="use_saved"><b>Use Saved Routes:</b></label>
+            <select class="w3-select w3-border" id="use_saved" name="value">
+              <option value="1" {% if use_saved_routes %}selected{% endif %}>On</option>
+              <option value="0" {% if not use_saved_routes %}selected{% endif %}>Off</option>
+            </select>
+            <input type="hidden" name="key" value="RR-UseSavedRoutes">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+        </div>
+      </div>
+      <div class="w3-half">
+        <div class="w3-card w3-padding w3-margin-bottom">
+          <h4>Probe Settings</h4>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="qr_enabled"><b>Enable Probing:</b></label>
+            <select class="w3-select w3-border" id="qr_enabled" name="value">
+              <option value="1" {% if qr_enabled %}selected{% endif %}>On</option>
+              <option value="0" {% if not qr_enabled %}selected{% endif %}>Off</option>
+            </select>
+            <input type="hidden" name="key" value="QR-Enabled">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="qr_update_hours"><b>Probe interval</b> (hours, 0.5-168):</label>
+            <input class="w3-input w3-border" id="qr_update_hours" name="value" type="number" min="0.5" max="168" step="0.5" value="{{ qr_update_hours }}">
+            <input type="hidden" name="key" value="QR-UpdateHours">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="qr_amount"><b>Probe amount</b> (sats):</label>
+            <input class="w3-input w3-border" id="qr_amount" name="value" type="number" min="1" value="{{ qr_amount }}">
+            <input type="hidden" name="key" value="QR-Amount">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="qr_max_per_target"><b>Max probes per target</b> (1-20):</label>
+            <input class="w3-input w3-border" id="qr_max_per_target" name="value" type="number" min="1" max="20" value="{{ qr_max_per_target }}">
+            <input type="hidden" name="key" value="QR-MaxPerTarget">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
+
 <script>
-async function loadRoutes(){
+const GRAPH_LINKS = '{{ graph_links }}';
+
+function openTab(evt, name) {
+  document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tablink').forEach(el => el.classList.remove('w3-blue'));
+  document.getElementById(name).style.display = 'block';
+  evt.currentTarget.classList.add('w3-blue');
+}
+
+function ageColor(dateStr) {
+  if (!dateStr) return 'w3-text-grey';
+  const hours = (Date.now() - new Date(dateStr).getTime()) / 3600000;
+  if (hours < 24) return 'w3-text-green';
+  if (hours < 72) return 'w3-text-orange';
+  return 'w3-text-red';
+}
+
+let routesData = [];
+let reputationData = [];
+
+async function loadRoutes() {
   const res = await GET('rebalanceroutes', {data:{}});
-  if(res.results){
-    const table = byId('routesTable');
-    table.innerHTML = '';
-    res.results.sort((a,b)=>{
-      const ta = (a.target_alias || a.target_pubkey).toLowerCase();
-      const tb = (b.target_alias || b.target_pubkey).toLowerCase();
-      if(ta < tb) return -1;
-      if(ta > tb) return 1;
-      return b.weighted_ratio - a.weighted_ratio;
-    });
-    res.results.forEach(r => {
-      const row = table.insertRow();
-      row.dataset.id = r.id;
-      row.insertCell().innerHTML = `<input class="w3-check route-select" value="${r.id}" type="checkbox">`;
-      row.insertCell().innerText = (r.target_alias ? r.target_alias + ' - ' : '') + r.target_pubkey;
-      row.insertCell().innerText = (r.outgoing_alias ? r.outgoing_alias + ' - ' : '') + r.outgoing_chan_id;
-      row.insertCell().innerText = (r.success_ratio*100).toFixed(1)+'%';
-      row.insertCell().innerText = (r.weighted_ratio*100).toFixed(1)+'%';
-      row.insertCell().innerText = r.success_count;
-      row.insertCell().innerText = r.failure_count;
-      row.insertCell().innerText = r.last_success ? formatDate(r.last_success) : '---';
-      row.insertCell().innerText = r.last_failure ? formatDate(r.last_failure) : '---';
-      const cell = row.insertCell();
-      const view = document.createElement('a');
-      view.innerText = 'View';
-      view.href = `/rebalanceroute/${r.id}`;
-      view.target = '_blank';
-      cell.appendChild(view);
-      cell.appendChild(document.createTextNode(' '));
-      const del = document.createElement('button');
-      del.innerText = 'Delete';
-      del.onclick = async () => {
-        if(!confirm('Delete this route?')) return;
-        await DELETE(`rebalanceroutes/${r.id}`);
-        row.remove();
-      };
-      cell.appendChild(del);
-    });
+  if (!res.results) return;
+  routesData = res.results;
+  routesData.sort((a, b) => {
+    const ta = (a.target_alias || a.target_pubkey).toLowerCase();
+    const tb = (b.target_alias || b.target_pubkey).toLowerCase();
+    if (ta < tb) return -1;
+    if (ta > tb) return 1;
+    return b.weighted_ratio - a.weighted_ratio;
+  });
+  renderRoutes();
+  updateOverview();
+}
+
+function renderRoutes() {
+  const table = byId('routesTable');
+  table.innerHTML = '';
+  routesData.forEach(r => {
+    const row = table.insertRow();
+    row.dataset.id = r.id;
+    row.insertCell().innerHTML = `<input class="w3-check route-select" value="${r.id}" type="checkbox">`;
+    row.insertCell().innerText = (r.target_alias ? r.target_alias + ' - ' : '') + r.target_pubkey;
+    row.insertCell().innerText = (r.outgoing_alias ? r.outgoing_alias + ' - ' : '') + r.outgoing_chan_id;
+    row.insertCell().innerText = r.last_fee_ppm != null ? Math.round(r.last_fee_ppm) : '---';
+    // Source badge
+    const isProbed = r.success_count === 0 && r.failure_count === 0;
+    const srcCell = row.insertCell();
+    const badge = document.createElement('span');
+    badge.className = isProbed ? 'w3-tag w3-light-blue' : 'w3-tag w3-light-green';
+    badge.innerText = isProbed ? 'Probed' : 'Tested';
+    srcCell.appendChild(badge);
+    row.insertCell().innerText = (r.success_ratio * 100).toFixed(1) + '%';
+    row.insertCell().innerText = (r.weighted_ratio * 100).toFixed(1) + '%';
+    row.insertCell().innerText = r.success_count;
+    row.insertCell().innerText = r.failure_count;
+    // Last success with age color
+    const lsCell = row.insertCell();
+    lsCell.innerText = r.last_success ? formatDate(r.last_success) : '---';
+    lsCell.className = ageColor(r.last_success);
+    row.insertCell().innerText = r.last_failure ? formatDate(r.last_failure) : '---';
+    const cell = row.insertCell();
+    const view = document.createElement('a');
+    view.innerText = 'View';
+    view.href = `/rebalanceroute/${r.id}`;
+    view.target = '_blank';
+    cell.appendChild(view);
+    cell.appendChild(document.createTextNode(' '));
+    const del = document.createElement('button');
+    del.innerText = 'Delete';
+    del.className = 'w3-button w3-tiny w3-red';
+    del.onclick = async () => {
+      if (!confirm('Delete this route?')) return;
+      await DELETE(`rebalanceroutes/${r.id}`);
+      row.remove();
+    };
+    cell.appendChild(del);
+  });
+}
+
+async function loadReputation() {
+  const res = await GET('nodereputation', {data:{}});
+  if (!res.results) return;
+  reputationData = res.results;
+  renderReputation();
+  updateOverview();
+}
+
+function renderReputation() {
+  const table = byId('reputationTable');
+  table.innerHTML = '';
+  reputationData.forEach(n => {
+    const row = table.insertRow();
+    const score = n.weighted_ratio;
+    if (score < 0.3) row.className = 'w3-pale-red';
+    else if (score < 0.5) row.className = 'w3-pale-yellow';
+    const nodeCell = row.insertCell();
+    const alias = n.alias || n.pubkey.substring(0, 20) + '...';
+    const link = document.createElement('a');
+    link.href = GRAPH_LINKS + '/node/' + n.pubkey;
+    link.target = '_blank';
+    link.innerText = alias;
+    nodeCell.appendChild(link);
+    const small = document.createElement('small');
+    small.innerText = ' ' + n.pubkey.substring(0, 12) + '...';
+    small.className = 'w3-text-grey';
+    nodeCell.appendChild(small);
+    row.insertCell().innerText = n.success_count;
+    row.insertCell().innerText = n.failure_count;
+    row.insertCell().innerText = (score * 100).toFixed(1) + '%';
+    row.insertCell().innerText = n.last_success ? formatDate(n.last_success) : '---';
+    row.insertCell().innerText = n.last_failure ? formatDate(n.last_failure) : '---';
+  });
+}
+
+async function loadLastProbe() {
+  const res = await GET('settings', {data:{key: 'QR-LastProbe'}});
+  if (res.results && res.results.length > 0) {
+    byId('stat-last-probe').innerText = formatDate(res.results[0].value);
+  } else {
+    byId('stat-last-probe').innerText = 'Never';
   }
 }
 
-document.addEventListener('DOMContentLoaded', loadRoutes);
+function updateOverview() {
+  if (routesData.length > 0 || reputationData.length > 0) {
+    byId('stat-total-routes').innerText = routesData.length;
+    const probed = routesData.filter(r => r.success_count === 0 && r.failure_count === 0).length;
+    byId('stat-probed').innerText = probed;
+    byId('stat-tested').innerText = routesData.length - probed;
+    const dayAgo = Date.now() - 86400000;
+    const recent = routesData.filter(r => {
+      const ls = r.last_success ? new Date(r.last_success).getTime() : 0;
+      const lf = r.last_failure ? new Date(r.last_failure).getTime() : 0;
+      return Math.max(ls, lf) > dayAgo;
+    }).length;
+    byId('stat-recent').innerText = recent;
+    byId('stat-total-nodes').innerText = reputationData.length;
+    byId('stat-poor-nodes').innerText = reputationData.filter(n => n.weighted_ratio < 0.3).length;
+  }
+}
 
-async function deleteSelected(){
-  const ids = [...document.getElementsByClassName('route-select')].filter(c=>c.checked).map(c=>c.value);
-  if(ids.length == 0 || !confirm(`Delete ${ids.length} route(s)?`)) return;
-  for(const id of ids){
+async function deleteSelected() {
+  const ids = [...document.getElementsByClassName('route-select')].filter(c => c.checked).map(c => c.value);
+  if (ids.length == 0 || !confirm(`Delete ${ids.length} route(s)?`)) return;
+  for (const id of ids) {
     await DELETE(`rebalanceroutes/${id}`);
     const row = document.querySelector(`tr[data-id='${id}']`);
-    if(row) row.remove();
+    if (row) row.remove();
   }
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadRoutes();
+  loadReputation();
+  loadLastProbe();
+});
 </script>
 {% endblock %}

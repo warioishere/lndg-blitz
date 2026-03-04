@@ -13,7 +13,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
-from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, calc_success_ratio, calc_weighted_ratio
+from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, NodeReputation, calc_success_ratio, calc_weighted_ratio
 from gui.node_cache import get_node_info_cached, cache_stats
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
@@ -2076,16 +2076,18 @@ def rebalancing(request):
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def rebalance_routes(request):
     if request.method == 'GET':
-        setting = LocalSettings.objects.filter(key='RR-RouteLimit').first()
-        route_limit = setting.value if setting else 10
-        collect_setting = LocalSettings.objects.filter(key='RR-CollectRoutes').first()
-        collect_routes = False if collect_setting and collect_setting.value == '0' else True
-        use_setting = LocalSettings.objects.filter(key='RR-UseSavedRoutes').first()
-        use_saved = False if use_setting and use_setting.value == '0' else True
+        def _setting(key, default=''):
+            s = LocalSettings.objects.filter(key=key).first()
+            return s.value if s else default
         context = {
-            'route_limit': route_limit,
-            'collect_routes': collect_routes,
-            'use_saved_routes': use_saved,
+            'route_limit': _setting('RR-RouteLimit', '10'),
+            'collect_routes': _setting('RR-CollectRoutes', '1') != '0',
+            'use_saved_routes': _setting('RR-UseSavedRoutes', '1') != '0',
+            'qr_enabled': _setting('QR-Enabled', '0') != '0',
+            'qr_update_hours': _setting('QR-UpdateHours', '6'),
+            'qr_amount': _setting('QR-Amount', '10000'),
+            'qr_max_per_target': _setting('QR-MaxPerTarget', '5'),
+            'graph_links': graph_links(),
         }
         return render(request, 'rebalance_routes.html', context)
     else:
@@ -3455,6 +3457,15 @@ class RebalanceRouteViewSet(viewsets.ReadOnlyModelViewSet):
         route = get_object_or_404(self.queryset, pk=pk)
         route.delete()
         return Response({'message': 'Deleted'})
+
+class NodeReputationViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
+    queryset = NodeReputation.objects.annotate(
+        ratio=calc_success_ratio(F('success_count'), F('failure_count')),
+        weighted_ratio=calc_weighted_ratio(F('success_count'), F('failure_count')),
+        alias=Subquery(Peers.objects.filter(pubkey=OuterRef('pubkey')).values('alias')[:1]),
+    ).order_by('weighted_ratio')
+    serializer_class = NodeReputationSerializer
 
 class FailedHTLCFilter(FilterSet):
     chan_in_or_out = CharFilter(method='filter_chan_in_or_out', label='Chan In Or Out')
