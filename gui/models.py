@@ -540,6 +540,25 @@ class RebalanceRoute(models.Model):
         ]
 
 
+class NodeReputation(models.Model):
+    pubkey = models.CharField(max_length=66, primary_key=True)
+    success_count = models.IntegerField(default=0)
+    failure_count = models.IntegerField(default=0)
+    last_success = models.DateTimeField(null=True)
+    last_failure = models.DateTimeField(null=True)
+
+    @property
+    def success_ratio(self):
+        return calc_success_ratio(self.success_count, self.failure_count)
+
+    @property
+    def weighted_ratio(self):
+        return calc_weighted_ratio(self.success_count, self.failure_count)
+
+    class Meta:
+        app_label = 'gui'
+
+
 class NodeCache(models.Model):
     pubkey = models.CharField(max_length=66, primary_key=True)
     data = models.JSONField()

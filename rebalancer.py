@@ -27,6 +27,7 @@ from gui.models import (
     Forwards,
     Autopilot,
     RebalanceRoute,
+    NodeReputation,
     calc_success_ratio,
     calc_weighted_ratio,
 )
@@ -163,7 +164,9 @@ def saved_routes_enabled():
 def get_saved_routes(pubkey, chan_ids, limit=10):
     try:
         cutoff = timezone.now() - timedelta(minutes=30)
-        return list(
+        # Fetch more candidates than needed so reputation + diversity can re-rank
+        fetch_limit = max(limit * 3, 30)
+        candidates = list(
             RebalanceRoute.objects
             .filter(target_pubkey=pubkey, outgoing_chan_id__in=chan_ids)
             .filter(Q(last_failure__lt=cutoff) | Q(last_failure__isnull=True))
@@ -171,8 +174,56 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
                 ratio=calc_success_ratio(F('success_count'), F('failure_count')),
                 weighted_ratio=calc_weighted_ratio(F('success_count'), F('failure_count')),
             )
-            .order_by('-weighted_ratio')[:limit]
+            .order_by('-weighted_ratio')[:fetch_limit]
         )
+        if not candidates:
+            return []
+
+        # Step 1: Node reputation scoring
+        route_hops = {}
+        all_pubkeys = set()
+        for r in candidates:
+            hops = set(r.route.split('-'))
+            route_hops[r.id] = hops
+            all_pubkeys.update(hops)
+
+        rep_map = {}
+        if all_pubkeys:
+            for nr in NodeReputation.objects.filter(pubkey__in=all_pubkeys):
+                rep_map[nr.pubkey] = calc_weighted_ratio(nr.success_count, nr.failure_count)
+
+        scored = []
+        for r in candidates:
+            hops = route_hops[r.id]
+            if hops and rep_map:
+                node_scores = [rep_map.get(pk, 0.5) for pk in hops]
+                min_node_score = min(node_scores)
+            else:
+                min_node_score = 0.5
+            adj_score = r.weighted_ratio * min_node_score
+            scored.append((r, adj_score, hops))
+
+        # Step 2: Diversity-aware greedy selection
+        scored.sort(key=lambda x: x[1], reverse=True)
+        selected = []
+        used_hops = set()
+        remaining = list(scored)
+
+        while remaining and len(selected) < limit:
+            best_idx = 0
+            best_final = -1
+            for i, (r, adj_score, hops) in enumerate(remaining):
+                shared = len(hops & used_hops)
+                penalty = 0.5 ** shared
+                final = adj_score * penalty
+                if final > best_final:
+                    best_final = final
+                    best_idx = i
+            r, adj_score, hops = remaining.pop(best_idx)
+            selected.append(r)
+            used_hops.update(hops)
+
+        return selected
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting saved routes: {str(e)}")
         return []
@@ -212,12 +263,50 @@ def update_route(pubkey, chan_id, route_hex, success=True):
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error updating route record: {str(e)}")
 
 @sync_to_async
+def update_node_reputations(route_hex, success, failure_source_index=None):
+    try:
+        if get_local_setting('RR-CollectRoutes', '1', str) == '0':
+            return
+        parsed = ln.Route()
+        parsed.ParseFromString(bytes.fromhex(route_hex))
+        hops = list(parsed.hops)
+        if not hops:
+            return
+        now = timezone.now()
+        if success:
+            for hop in hops:
+                node, _ = NodeReputation.objects.get_or_create(pubkey=hop.pub_key)
+                node.success_count += 1
+                node.last_success = now
+                node.save()
+        elif failure_source_index is not None and failure_source_index < len(hops):
+            for i, hop in enumerate(hops):
+                if i < failure_source_index:
+                    node, _ = NodeReputation.objects.get_or_create(pubkey=hop.pub_key)
+                    node.success_count += 1
+                    node.last_success = now
+                    node.save()
+                elif i == failure_source_index:
+                    node, _ = NodeReputation.objects.get_or_create(pubkey=hop.pub_key)
+                    node.failure_count += 1
+                    node.last_failure = now
+                    node.save()
+                    break
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error updating node reputations: {str(e)}")
+
+@sync_to_async
 def purge_stale_routes():
     try:
         if get_local_setting('RR-CollectRoutes', '1', str) == '0':
             return
         cutoff = timezone.now() - timedelta(days=7)
         RebalanceRoute.objects.filter(Q(last_success__lt=cutoff) | Q(last_success__isnull=True)).delete()
+        rep_cutoff = timezone.now() - timedelta(days=14)
+        NodeReputation.objects.filter(
+            Q(last_success__lt=rep_cutoff) | Q(last_success__isnull=True),
+            Q(last_failure__lt=rep_cutoff) | Q(last_failure__isnull=True),
+        ).delete()
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error purging stale routes: {str(e)}")
 
@@ -427,9 +516,11 @@ async def run_rebalancer(rebalance, worker):
                         await update_route(
                             rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, True
                         )
+                        await update_node_reputations(rebuilt_hex, True)
                         break
                     else:
                         failure = getattr(payment_response, "failure", None)
+                        fsi = None
                         if failure:
                             code_num = getattr(failure, "code", None)
                             reason = FAILURE_CODE_NAMES.get(code_num, code_num)
@@ -438,15 +529,17 @@ async def run_rebalancer(rebalance, worker):
                                 detail = "not set"
                             else:
                                 detail = FAILURE_DETAIL_NAMES.get(detail_num, detail_num)
+                            fsi = getattr(failure, "failure_source_index", None)
                         else:
                             reason = "no-details"
                             detail = "not set"
                         print(
-                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route failed via {sr.outgoing_chan_id} - code: {reason} - detail: {detail}"
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route failed via {sr.outgoing_chan_id} - code: {reason} - detail: {detail} - failure_hop: {fsi}"
                         )
                         await update_route(
                             rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, False
                         )
+                        await update_node_reputations(rebuilt_hex, False, fsi)
                 except Exception as e:
                     print(
                         f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute failed via {sr.outgoing_chan_id} - {e}"
@@ -493,12 +586,15 @@ async def run_rebalancer(rebalance, worker):
                             route_hex = payment_response.htlcs[0].route.SerializeToString().hex()
                             out_chan = str(payment_response.htlcs[0].route.hops[0].chan_id)
                             await update_route(rebalance.last_hop_pubkey, out_chan, route_hex, True)
+                            await update_node_reputations(route_hex, True)
                         elif payment_response.status == 3:
                             #FAILURE
                             if payment_response.htlcs:
                                 route_hex = payment_response.htlcs[0].route.SerializeToString().hex()
                                 out_chan = str(payment_response.htlcs[0].route.hops[0].chan_id)
                                 await update_route(rebalance.last_hop_pubkey, out_chan, route_hex, False)
+                                fsi = getattr(payment_response.htlcs[0].failure, "failure_source_index", None)
+                                await update_node_reputations(route_hex, False, fsi)
                             if payment_response.failure_reason == 1:
                                 #FAILURE_REASON_TIMEOUT
                                 rebalance.status = 3
