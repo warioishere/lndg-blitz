@@ -560,6 +560,20 @@ class NodeReputation(models.Model):
         app_label = 'gui'
 
 
+class ProbeLog(models.Model):
+    timestamp = models.DateTimeField(auto_now_add=True)
+    targets_scanned = models.IntegerField(default=0)
+    routes_found = models.IntegerField(default=0)
+    routes_existing = models.IntegerField(default=0)
+    errors = models.IntegerField(default=0)
+    duration_ms = models.IntegerField(default=0)
+    details = models.JSONField(default=list)
+
+    class Meta:
+        app_label = 'gui'
+        ordering = ['-timestamp']
+
+
 class NodeCache(models.Model):
     pubkey = models.CharField(max_length=66, primary_key=True)
     data = models.JSONField()

@@ -88,18 +88,35 @@
         </div>
       </div>
     </div>
-    <h4>Probed Routes by Target</h4>
+    <h4>Probe History</h4>
     <table class="w3-table-all w3-centered w3-hoverable">
       <thead>
         <tr>
-          <th>Target</th>
-          <th>Probed Routes</th>
-          <th>Tested Routes</th>
-          <th>Best Score</th>
+          <th>Time</th>
+          <th>Targets</th>
+          <th>New Routes</th>
+          <th>Existing</th>
+          <th>Errors</th>
+          <th>Duration</th>
         </tr>
       </thead>
-      <tbody id="probeTargetTable"></tbody>
+      <tbody id="probeLogTable"></tbody>
     </table>
+    <div id="probeDetailPanel" class="w3-margin-top" style="display:none">
+      <h4>Probe Details — <span id="probeDetailTime"></span></h4>
+      <table class="w3-table-all w3-centered w3-hoverable">
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Out Chans Tried</th>
+            <th>New Routes</th>
+            <th>Existing</th>
+            <th>Errors</th>
+          </tr>
+        </thead>
+        <tbody id="probeDetailTable"></tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Node Reputation Tab -->
@@ -370,6 +387,7 @@ async function loadProbeData() {
   }
 
   updateProbeResults();
+  loadProbeLogs();
 }
 
 function updateProbeResults() {
@@ -377,50 +395,82 @@ function updateProbeResults() {
   const tested = routesData.filter(r => r.success_count > 0 || r.failure_count > 0);
   byId('probe-routes').innerText = probed.length;
 
-  // Unique targets from probed routes
   const targetSet = new Set(probed.map(r => r.target_pubkey));
   byId('probe-targets').innerText = targetSet.size;
 
-  // Success rate of routes that started as probed and got tested
   if (tested.length > 0) {
     const withSuccess = tested.filter(r => r.success_count > 0).length;
     byId('probe-success-rate').innerText = (withSuccess / tested.length * 100).toFixed(1) + '%';
   } else {
     byId('probe-success-rate').innerText = '---';
   }
+}
 
-  // Per-target breakdown
-  const targets = {};
-  routesData.forEach(r => {
-    const key = r.target_pubkey;
-    if (!targets[key]) {
-      targets[key] = { alias: r.target_alias || key.substring(0, 20) + '...', pubkey: key, probed: 0, tested: 0, bestScore: 0 };
-    }
-    if (r.success_count === 0 && r.failure_count === 0) {
-      targets[key].probed++;
-    } else {
-      targets[key].tested++;
-    }
-    if (r.weighted_ratio > targets[key].bestScore) {
-      targets[key].bestScore = r.weighted_ratio;
-    }
-  });
+let probeLogData = [];
 
-  const table = byId('probeTargetTable');
+async function loadProbeLogs() {
+  const res = await GET('probelogs', {data:{}});
+  if (!res.results) return;
+  probeLogData = res.results;
+  renderProbeLogs();
+}
+
+function renderProbeLogs() {
+  const table = byId('probeLogTable');
   table.innerHTML = '';
-  const sorted = Object.values(targets).sort((a, b) => b.probed - a.probed);
-  sorted.forEach(t => {
+  if (probeLogData.length === 0) {
     const row = table.insertRow();
-    const nameCell = row.insertCell();
-    const link = document.createElement('a');
-    link.href = GRAPH_LINKS + '/node/' + t.pubkey;
-    link.target = '_blank';
-    link.innerText = t.alias;
-    nameCell.appendChild(link);
-    row.insertCell().innerText = t.probed;
-    row.insertCell().innerText = t.tested;
-    row.insertCell().innerText = (t.bestScore * 100).toFixed(1) + '%';
+    const cell = row.insertCell();
+    cell.colSpan = 6;
+    cell.innerText = 'No probe runs recorded yet';
+    cell.className = 'w3-text-grey';
+    return;
+  }
+  probeLogData.forEach((log, idx) => {
+    const row = table.insertRow();
+    row.style.cursor = 'pointer';
+    row.onclick = () => showProbeDetail(idx);
+    if (log.routes_found > 0) row.className = 'w3-pale-green';
+    else if (log.errors > 0 && log.routes_found === 0) row.className = 'w3-pale-yellow';
+    row.insertCell().innerText = formatDate(log.timestamp);
+    row.insertCell().innerText = log.targets_scanned;
+    row.insertCell().innerText = log.routes_found;
+    row.insertCell().innerText = log.routes_existing;
+    row.insertCell().innerText = log.errors;
+    row.insertCell().innerText = log.duration_ms < 1000 ? log.duration_ms + 'ms' : (log.duration_ms / 1000).toFixed(1) + 's';
   });
+}
+
+function showProbeDetail(idx) {
+  const log = probeLogData[idx];
+  const panel = byId('probeDetailPanel');
+  const table = byId('probeDetailTable');
+  byId('probeDetailTime').innerText = formatDate(log.timestamp);
+  table.innerHTML = '';
+  if (!log.details || log.details.length === 0) {
+    const row = table.insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 5;
+    cell.innerText = 'No target details available';
+    cell.className = 'w3-text-grey';
+  } else {
+    log.details.forEach(d => {
+      const row = table.insertRow();
+      if (d.errors > 0 && d.new === 0) row.className = 'w3-pale-yellow';
+      else if (d.new > 0) row.className = 'w3-pale-green';
+      const nameCell = row.insertCell();
+      const link = document.createElement('a');
+      link.href = GRAPH_LINKS + '/node/' + d.pubkey;
+      link.target = '_blank';
+      link.innerText = d.alias || d.pubkey.substring(0, 20) + '...';
+      nameCell.appendChild(link);
+      row.insertCell().innerText = d.out_chans_tried;
+      row.insertCell().innerText = d.new;
+      row.insertCell().innerText = d.existing;
+      row.insertCell().innerText = d.errors;
+    });
+  }
+  panel.style.display = 'block';
 }
 
 function updateOverview() {

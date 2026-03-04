@@ -13,7 +13,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
-from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, NodeReputation, calc_success_ratio, calc_weighted_ratio
+from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, NodeReputation, ProbeLog, calc_success_ratio, calc_weighted_ratio
 from gui.node_cache import get_node_info_cached, cache_stats
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
@@ -3490,6 +3490,11 @@ class NodeReputationViewSet(viewsets.ReadOnlyModelViewSet):
         alias=Subquery(Peers.objects.filter(pubkey=OuterRef('pubkey')).values('alias')[:1]),
     ).order_by('weighted_ratio')
     serializer_class = NodeReputationSerializer
+
+class ProbeLogViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
+    queryset = ProbeLog.objects.all()[:50]
+    serializer_class = ProbeLogSerializer
 
 class FailedHTLCFilter(FilterSet):
     chan_in_or_out = CharFilter(method='filter_chan_in_or_out', label='Chan In Or Out')

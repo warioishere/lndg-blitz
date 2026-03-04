@@ -13,7 +13,7 @@ from os import environ
 from requests import get
 environ['DJANGO_SETTINGS_MODULE'] = 'lndg.settings'
 django.setup()
-from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, Closures, Resolutions, PendingHTLCs, LocalSettings, FailedHTLCs, Autofees, InboundFeeLog, PendingChannels, HistFailedHTLC, PeerEvents, RebalanceRoute
+from gui.models import Payments, PaymentHops, Invoices, Forwards, Channels, Peers, Onchain, Closures, Resolutions, PendingHTLCs, LocalSettings, FailedHTLCs, Autofees, InboundFeeLog, PendingChannels, HistFailedHTLC, PeerEvents, RebalanceRoute, ProbeLog
 from gui.node_cache import get_node_info_cached
 import af
 from jobs_emergency import emergency_forward_check
@@ -1043,6 +1043,8 @@ def probe_routes_job(stub):
             pass
     if datetime.now() - last_probe < timedelta(hours=update_hours):
         return
+    import time as _time
+    probe_start = _time.monotonic()
     # Find auto-rebalance targets that need inbound
     targets = Channels.objects.filter(is_open=True, auto_rebalance=True)
     # Find outbound candidates (channels with enough liquidity to be sources)
@@ -1053,11 +1055,16 @@ def probe_routes_job(stub):
     )
     probed_pubkeys = set()
     total_new = 0
+    total_existing = 0
+    total_errors = 0
+    target_details = []
     for ch in targets:
         if ch.remote_pubkey in probed_pubkeys:
             continue
         probed_pubkeys.add(ch.remote_pubkey)
-        probed_for_target = 0
+        target_new = 0
+        target_existing = 0
+        target_errors = 0
         # Get outbound channels excluding channels to same peer
         out_chans = [c for c in outbound_cans if c not in
                      set(Channels.objects.filter(remote_pubkey=ch.remote_pubkey).values_list('chan_id', flat=True))]
@@ -1072,6 +1079,7 @@ def probe_routes_job(stub):
                     )
                 )
             except Exception as e:
+                target_errors += 1
                 continue
             if not response or not response.routes:
                 continue
@@ -1092,11 +1100,39 @@ def probe_routes_job(stub):
                     defaults={"final_cltv_delta": cltv, "route_hex": route_hex},
                 )
                 if created:
-                    total_new += 1
-                    probed_for_target += 1
+                    target_new += 1
+                else:
+                    target_existing += 1
+        total_new += target_new
+        total_existing += target_existing
+        total_errors += target_errors
+        alias = Peers.objects.filter(pubkey=ch.remote_pubkey).values_list('alias', flat=True).first() or ''
+        target_details.append({
+            'pubkey': ch.remote_pubkey,
+            'alias': alias,
+            'new': target_new,
+            'existing': target_existing,
+            'errors': target_errors,
+            'out_chans_tried': min(len(out_chans), max_per_target),
+        })
+    duration_ms = int((_time.monotonic() - probe_start) * 1000)
     LocalSettings.objects.update_or_create(key='QR-LastProbe', defaults={'value': datetime.now().isoformat()})
+    ProbeLog.objects.create(
+        targets_scanned=len(probed_pubkeys),
+        routes_found=total_new,
+        routes_existing=total_existing,
+        errors=total_errors,
+        duration_ms=duration_ms,
+        details=target_details,
+    )
+    # Keep only the last 100 probe logs
+    old_ids = ProbeLog.objects.order_by('-timestamp').values_list('id', flat=True)[100:]
+    if old_ids:
+        ProbeLog.objects.filter(id__in=list(old_ids)).delete()
     if total_new:
         print(f"{datetime.now().strftime('%c')} : [Data] : QueryRoutes probe discovered {total_new} new route(s) for {len(probed_pubkeys)} target(s)")
+    else:
+        print(f"{datetime.now().strftime('%c')} : [Data] : QueryRoutes probe completed: {len(probed_pubkeys)} targets, {total_existing} existing routes, {total_errors} errors ({duration_ms}ms)")
 
 def main():
     channel = get_shared_channel()

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from rest_framework.relations import PrimaryKeyRelatedField
-from .models import LocalSettings, Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, Peers, Onchain, PendingHTLCs, FailedHTLCs, Closures, Resolutions, PeerEvents, TradeSales, Autofees, InboundFeeLog, RebalanceRoute, NodeReputation
+from .models import LocalSettings, Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, Peers, Onchain, PendingHTLCs, FailedHTLCs, Closures, Resolutions, PeerEvents, TradeSales, Autofees, InboundFeeLog, RebalanceRoute, NodeReputation, ProbeLog
 
 ##FUTURE UPDATE 'exclude' TO 'fields'
 
@@ -256,6 +256,12 @@ class NodeReputationSerializer(serializers.HyperlinkedModelSerializer):
     alias = serializers.CharField(read_only=True)
     class Meta:
         model = NodeReputation
+        exclude = []
+
+class ProbeLogSerializer(serializers.HyperlinkedModelSerializer):
+    id = serializers.ReadOnlyField()
+    class Meta:
+        model = ProbeLog
         exclude = []
 
 class ResetSerializer(serializers.Serializer):
