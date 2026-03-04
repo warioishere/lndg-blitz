@@ -279,7 +279,7 @@ def full_fee_adj(request):
             inbound_target = None
             if ch.inbound_offset != 0:
                 balance = new_rate + ch.inbound_offset
-                inbound_target = -balance if balance > 0 else 0
+                inbound_target = int(round(-balance)) if balance > 0 else 0
                 inbound_base_fee = ch.local_inbound_base_fee if ch.local_inbound_base_fee else 0
                 policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
             stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(**policy_kwargs))
@@ -2807,7 +2807,7 @@ def update_channel(request):
                 inbound_target = None
                 if db_channel.inbound_offset != 0:
                     balance = target + db_channel.inbound_offset
-                    inbound_target = -balance if balance > 0 else 0
+                    inbound_target = int(round(-balance)) if balance > 0 else 0
                     inbound_base_fee = db_channel.local_inbound_base_fee if db_channel.local_inbound_base_fee else 0
                     policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
                 stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(**policy_kwargs))
@@ -3048,7 +3048,7 @@ def sync_peer_outbound_fee(channel: Channels, new_rate: int, stub=None):
         inbound_target = None
         if sibling.inbound_offset != 0:
             balance = new_rate + sibling.inbound_offset
-            inbound_target = -balance if balance > 0 else 0
+            inbound_target = int(round(-balance)) if balance > 0 else 0
             inbound_base_fee = sibling.local_inbound_base_fee if sibling.local_inbound_base_fee else 0
             policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
         client.UpdateChannelPolicy(
