@@ -3213,6 +3213,30 @@ def update_setting(request):
                 setting.value = target
                 setting.save()
                 messages.success(request, 'Saved route usage ' + ('enabled' if target == '1' else 'disabled'))
+            elif key == 'QR-Enabled':
+                target = '1' if str(value) == '1' else '0'
+                setting, _ = LocalSettings.objects.get_or_create(key='QR-Enabled', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Route probing ' + ('enabled' if target == '1' else 'disabled'))
+            elif key == 'QR-UpdateHours':
+                target = float(value)
+                setting, _ = LocalSettings.objects.get_or_create(key='QR-UpdateHours', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Probe interval updated to: ' + str(target) + 'h')
+            elif key == 'QR-Amount':
+                target = int(value)
+                setting, _ = LocalSettings.objects.get_or_create(key='QR-Amount', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Probe amount updated to: ' + str(target) + ' sats')
+            elif key == 'QR-MaxPerTarget':
+                target = int(value)
+                setting, _ = LocalSettings.objects.get_or_create(key='QR-MaxPerTarget', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Max probes per target updated to: ' + str(target))
             else:
                 messages.error(request, 'Invalid Request. Please try again. [' + key +']')
         else:
