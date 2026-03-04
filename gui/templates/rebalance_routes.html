@@ -161,13 +161,13 @@ function openTab(evt, name) {
   document.querySelectorAll('.tablink').forEach(el => el.classList.remove('w3-blue'));
   document.getElementById(name).style.display = 'block';
   if (evt) evt.currentTarget.classList.add('w3-blue');
-  location.hash = name;
+  localStorage.setItem('routes-tab', name);
 }
 
 function restoreTab() {
-  const hash = location.hash.replace('#', '');
   const valid = ['Overview', 'Routes', 'Reputation', 'Settings'];
-  const tab = valid.includes(hash) ? hash : 'Overview';
+  const saved = localStorage.getItem('routes-tab');
+  const tab = valid.includes(saved) ? saved : 'Overview';
   document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.tablink').forEach(el => el.classList.remove('w3-blue'));
   document.getElementById(tab).style.display = 'block';
