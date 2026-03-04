@@ -1,7 +1,7 @@
 import django, json, secrets, asyncio
 from time import sleep
 from asgiref.sync import sync_to_async
-from django.db.models import Sum, F, Q
+from django.db.models import Sum, F, Q, Case, When, Value, IntegerField
 from datetime import datetime, timedelta
 from django.utils import timezone
 from gui.lnd_deps import lightning_pb2 as ln
@@ -173,8 +173,13 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
             .annotate(
                 ratio=calc_success_ratio(F('success_count'), F('failure_count')),
                 weighted_ratio=calc_weighted_ratio(F('success_count'), F('failure_count')),
+                is_untested=Case(
+                    When(success_count=0, failure_count=0, then=Value(1)),
+                    default=Value(0),
+                    output_field=IntegerField(),
+                ),
             )
-            .order_by('-weighted_ratio')[:fetch_limit]
+            .order_by('-is_untested', '-weighted_ratio')[:fetch_limit]
         )
         if not candidates:
             return []
