@@ -123,15 +123,16 @@
 
   <!-- Node Reputation Tab -->
   <div id="Reputation" class="tabcontent" style="display:none">
+    <input class="w3-input w3-border w3-margin-bottom" id="repSearch" type="text" placeholder="Search by alias or pubkey..." oninput="filterReputation()">
     <table class="w3-table-all w3-centered w3-hoverable">
       <thead>
         <tr>
           <th>Node</th>
-          <th>Successes</th>
-          <th>Failures</th>
-          <th>Score</th>
-          <th>Last Success</th>
-          <th>Last Failure</th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('success_count')">Successes <span id="rep-sort-success_count"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('failure_count')">Failures <span id="rep-sort-failure_count"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('weighted_ratio')">Score <span id="rep-sort-weighted_ratio"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('last_success')">Last Success <span id="rep-sort-last_success"></span></th>
+          <th class="w3-hover-light-grey" style="cursor:pointer" onclick="sortReputation('last_failure')">Last Failure <span id="rep-sort-last_failure"></span></th>
         </tr>
       </thead>
       <tbody id="reputationTable"></tbody>
@@ -320,10 +321,49 @@ async function loadReputation() {
   updateOverview();
 }
 
+let repSortKey = 'weighted_ratio';
+let repSortAsc = true;
+
+function filterReputation() {
+  renderReputation();
+}
+
+function sortReputation(key) {
+  if (repSortKey === key) {
+    repSortAsc = !repSortAsc;
+  } else {
+    repSortKey = key;
+    repSortAsc = false;
+  }
+  renderReputation();
+}
+
 function renderReputation() {
+  const q = byId('repSearch').value.toLowerCase();
+  let data = reputationData;
+  if (q) {
+    data = data.filter(n =>
+      (n.alias || '').toLowerCase().includes(q) ||
+      n.pubkey.toLowerCase().includes(q)
+    );
+  }
+  data = [...data].sort((a, b) => {
+    let av = a[repSortKey], bv = b[repSortKey];
+    if (repSortKey === 'last_success' || repSortKey === 'last_failure') {
+      av = av ? new Date(av).getTime() : 0;
+      bv = bv ? new Date(bv).getTime() : 0;
+    }
+    av = av ?? -1; bv = bv ?? -1;
+    return repSortAsc ? av - bv : bv - av;
+  });
+  // Update sort indicators
+  ['success_count','failure_count','weighted_ratio','last_success','last_failure'].forEach(k => {
+    const el = byId('rep-sort-' + k);
+    if (el) el.innerText = repSortKey === k ? (repSortAsc ? '\u25B2' : '\u25BC') : '';
+  });
   const table = byId('reputationTable');
   table.innerHTML = '';
-  reputationData.forEach(n => {
+  data.forEach(n => {
     const row = table.insertRow();
     const score = n.weighted_ratio;
     if (score < 0.3) row.className = 'w3-pale-red';
