@@ -40,6 +40,7 @@
 
   <!-- Routes Tab -->
   <div id="Routes" class="tabcontent" style="display:none">
+    <input class="w3-input w3-border w3-margin-bottom" id="routeSearch" type="text" placeholder="Search by alias or pubkey..." oninput="filterRoutes()">
     <button class="w3-button w3-red w3-margin-bottom" onclick="deleteSelected()">Delete Selected</button>
     <table class="w3-table-all w3-centered w3-hoverable">
       <thead>
@@ -256,10 +257,20 @@ async function loadRoutes() {
   updateOverview();
 }
 
-function renderRoutes() {
+function filterRoutes() {
+  const q = byId('routeSearch').value.toLowerCase();
+  const filtered = q ? routesData.filter(r =>
+    (r.target_alias || '').toLowerCase().includes(q) ||
+    r.target_pubkey.toLowerCase().includes(q)
+  ) : routesData;
+  renderRoutes(filtered);
+}
+
+function renderRoutes(data) {
+  if (!data) data = routesData;
   const table = byId('routesTable');
   table.innerHTML = '';
-  routesData.forEach(r => {
+  data.forEach(r => {
     const row = table.insertRow();
     row.dataset.id = r.id;
     row.insertCell().innerHTML = `<input class="w3-check route-select" value="${r.id}" type="checkbox">`;
