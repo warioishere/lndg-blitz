@@ -251,7 +251,7 @@ class RebalanceRouteSerializer(serializers.HyperlinkedModelSerializer):
         model = RebalanceRoute
         exclude = []
 
-class NodeReputationSerializer(serializers.HyperlinkedModelSerializer):
+class NodeReputationSerializer(serializers.ModelSerializer):
     weighted_ratio = serializers.ReadOnlyField()
     alias = serializers.CharField(read_only=True)
     class Meta:
