@@ -3497,9 +3497,9 @@ class NodeReputationViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
     queryset = NodeReputation.objects.annotate(
         ratio=calc_success_ratio(F('success_count'), F('failure_count')),
-        weighted_ratio=calc_weighted_ratio(F('success_count'), F('failure_count')),
+        wr_score=calc_weighted_ratio(F('success_count'), F('failure_count')),
         alias=Subquery(Peers.objects.filter(pubkey=OuterRef('pubkey')).values('alias')[:1]),
-    ).order_by('weighted_ratio')
+    ).order_by('wr_score')
     serializer_class = NodeReputationSerializer
 
 class ProbeLogViewSet(viewsets.ReadOnlyModelViewSet):
