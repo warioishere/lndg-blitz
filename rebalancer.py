@@ -296,13 +296,36 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
             selected.append(r)
             used_hops.update(hops)
 
+        # Step 3: Ensure exploration — reserve ~20% of slots for untested routes
+        min_explore = max(1, limit // 5)
+        untested_count = sum(1 for r in selected if r.success_count == 0 and r.failure_count == 0)
+        if untested_count < min_explore:
+            selected_ids = {r.id for r in selected}
+            untested_avail = [
+                r for r, s, h in scored
+                if r.success_count == 0 and r.failure_count == 0 and r.id not in selected_ids
+            ]
+            need = min(min_explore - untested_count, len(untested_avail))
+            if need > 0:
+                # Drop lowest-priority tested routes (last picked by diversity)
+                keep = []
+                can_drop = need
+                for r in reversed(selected):
+                    if can_drop > 0 and (r.success_count > 0 or r.failure_count > 0):
+                        can_drop -= 1
+                    else:
+                        keep.append(r)
+                keep.reverse()
+                keep.extend(untested_avail[:need])
+                selected = keep
+
         return selected
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting saved routes: {str(e)}")
         return []
 
 @sync_to_async
-def update_route(pubkey, chan_id, route_hex, success=True):
+def update_route(pubkey, chan_id, route_hex, success=True, forgive_failure=False):
     try:
         if get_local_setting('RR-CollectRoutes', '1', str) == '0':
             return
@@ -328,6 +351,9 @@ def update_route(pubkey, chan_id, route_hex, success=True):
             if not route_obj.last_success or now - route_obj.last_success > timedelta(minutes=5):
                 route_obj.success_count += 1
             route_obj.last_success = now
+            route_obj.last_failure = None
+            if forgive_failure and route_obj.failure_count > 0:
+                route_obj.failure_count -= 1
             if parsed.total_amt_msat and parsed.total_fees_msat:
                 route_obj.last_fee_ppm = (parsed.total_fees_msat / parsed.total_amt_msat) * 1000000
         else:
@@ -658,7 +684,7 @@ async def run_rebalancer(rebalance, worker):
                                         successful_out = probe_response.route.hops[0].chan_id
                                         successful_in = probe_response.route.hops[-1].chan_id
                                         rebuilt_hex = probe_build.route.SerializeToString().hex()
-                                        await update_route(rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, True)
+                                        await update_route(rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, True, forgive_failure=True)
                                         await update_node_reputations(rebuilt_hex, True)
                                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe payment succeeded: {probed} sats via {sr.outgoing_chan_id}")
                                         break
