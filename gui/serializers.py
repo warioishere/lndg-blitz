@@ -252,11 +252,11 @@ class RebalanceRouteSerializer(serializers.HyperlinkedModelSerializer):
         exclude = []
 
 class NodeReputationSerializer(serializers.ModelSerializer):
-    weighted_ratio = serializers.ReadOnlyField()
-    alias = serializers.CharField(read_only=True)
+    weighted_ratio = serializers.FloatField(read_only=True)
+    alias = serializers.CharField(read_only=True, default='')
     class Meta:
         model = NodeReputation
-        exclude = []
+        fields = ['pubkey', 'success_count', 'failure_count', 'last_success', 'last_failure', 'weighted_ratio', 'alias']
 
 class ProbeLogSerializer(serializers.HyperlinkedModelSerializer):
     id = serializers.ReadOnlyField()
