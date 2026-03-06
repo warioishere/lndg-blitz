@@ -902,12 +902,18 @@ def auto_schedule() -> List[Rebalancer]:
         )
         if len(inbound_cans) == 0 or len(outbound_cans) == 0:
             return []
-        
+
         max_fee_rate = get_local_setting('AR-MaxFeeRate', 500, int)
         variance = get_local_setting('AR-Variance', 0, int)
         wait_period = get_local_setting('AR-WaitPeriod', 30, int)
         get_local_setting('AR-Target%', 3, int)
         get_local_setting('AR-MaxCost%', 65, int)
+        source_fee_rate_map = dict(
+            auto_rebalance_channels
+            .filter(chan_id__in=outbound_cans)
+            .values_list('chan_id', 'local_fee_rate')
+        )
+        min_source_fee_rate = min(source_fee_rate_map.values()) if source_fee_rate_map else 0
         allowed_map = {}
         for entry in AllowedTarget.objects.select_related('source_chan').all():
             allowed_map.setdefault(entry.source_chan.chan_id, []).append(entry.target_pubkey)
@@ -924,7 +930,9 @@ def auto_schedule() -> List[Rebalancer]:
                 target = next((c for c in inbound_list if c.remote_pubkey == pub), None)
                 if not target:
                     continue
-                target_fee_rate = min(max_fee_rate, int(target.local_fee_rate * (target.ar_max_cost/100)))
+                source_fee_rate = source_fee_rate_map.get(source_id, 0)
+                spread = max(0, target.local_fee_rate - source_fee_rate)
+                target_fee_rate = min(max_fee_rate, int(spread * (target.ar_max_cost/100)))
                 if target_fee_rate <= target.remote_fee_rate:
                     continue
                 target_value = int(target.ar_amt_target+(target.ar_amt_target*((secrets.choice(range(-1000,1001))/1000)*variance/100)))
@@ -947,7 +955,8 @@ def auto_schedule() -> List[Rebalancer]:
         for target in inbound_list:
             if target.remote_pubkey in scheduled_targets:
                 continue
-            target_fee_rate = min(max_fee_rate, int(target.local_fee_rate * (target.ar_max_cost/100)))
+            spread = max(0, target.local_fee_rate - min_source_fee_rate)
+            target_fee_rate = min(max_fee_rate, int(spread * (target.ar_max_cost/100)))
             if target_fee_rate > 0 and target_fee_rate > target.remote_fee_rate:
                 target_value = int(target.ar_amt_target+(target.ar_amt_target*((secrets.choice(range(-1000,1001))/1000)*variance/100)))
                 target_fee = round(target_fee_rate*target_value*0.000001, 3) if target_fee_rate <= max_fee_rate else round(max_fee_rate*target_value*0.000001, 3)
