@@ -255,10 +255,10 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
             else:
                 min_node_score = 0.5
 
-            # Untested probed routes: give a baseline score so they get tried
+            # Untested probed routes: score higher than low-quality tested routes
             is_untested = r.success_count == 0 and r.failure_count == 0
             if is_untested:
-                adj_score = 0.25 * min_node_score
+                adj_score = 0.5 * min_node_score
             else:
                 # Time-decay: half-life of 48 hours
                 if r.last_success:
@@ -296,8 +296,8 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
             selected.append(r)
             used_hops.update(hops)
 
-        # Step 3: Ensure exploration — reserve ~20% of slots for untested routes
-        min_explore = max(1, limit // 5)
+        # Step 3: Ensure exploration — reserve ~50% of slots for untested routes
+        min_explore = max(1, limit // 2)
         untested_count = sum(1 for r in selected if r.success_count == 0 and r.failure_count == 0)
         if untested_count < min_explore:
             selected_ids = {r.id for r in selected}
