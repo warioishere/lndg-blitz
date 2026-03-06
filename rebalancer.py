@@ -577,14 +577,7 @@ async def run_rebalancer(rebalance, worker):
 
                     if build.route.total_fees_msat > fee_limit_msat:
                         print(
-                            f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr.outgoing_chan_id} exceeds fee limit"
-                        )
-                        rebuilt_hex = build.route.SerializeToString().hex()
-                        await update_route(
-                            rebalance.last_hop_pubkey,
-                            sr.outgoing_chan_id,
-                            rebuilt_hex,
-                            False,
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr.outgoing_chan_id} exceeds fee limit ({build.route.total_fees_msat} > {fee_limit_msat} msat) - skipping without penalty"
                         )
                         payment_response = None
                         continue
