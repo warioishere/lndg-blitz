@@ -376,7 +376,6 @@ def advanced_rebalancing(request):
                 Channels.objects.filter(
                     is_open=True,
                     auto_rebalance=True,
-                    ar_source=False,
                     local_fee_rate__gte=source.local_fee_rate + source.ar_source_ppm_diff,
                 )
                 .exclude(chan_id=source_chan_id)
@@ -421,7 +420,7 @@ def advanced_rebalancing(request):
             seen = set()
             for t in (
                 Channels.objects.filter(
-                    is_open=True, auto_rebalance=True, ar_source=False
+                    is_open=True, auto_rebalance=True
                 )
                 .exclude(chan_id=ch.chan_id)
                 .exclude(remote_pubkey=ch.remote_pubkey)
