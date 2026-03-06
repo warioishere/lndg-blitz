@@ -761,7 +761,7 @@ async def run_rebalancer(rebalance, worker):
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error while sending payment: {str(e)}")
         finally:
             close_shared_channel()
-            close_shared_async_channel()
+            await close_shared_async_channel()
             rebalance.stop = datetime.now()
             await save_record(rebalance)
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : {worker} completed payment attempts for: {rebalance.payment_hash}")

@@ -61,12 +61,12 @@ def close_shared_channel():
         _channel.close()
         _channel = None
 
-def close_shared_async_channel():
+async def close_shared_async_channel():
     """Close and reset the shared asynchronous grpc channel."""
     global _async_channel
     if _async_channel is not None:
         try:
-            _async_channel.close()
+            await _async_channel.close()
         finally:
             _async_channel = None
 
