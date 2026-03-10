@@ -1,5 +1,5 @@
 import django
-from datetime import datetime, timedelta
+from datetime import datetime
 from os import environ
 from threading import Thread
 from time import sleep, monotonic
@@ -172,8 +172,8 @@ def main():
 
             print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : Watching {len(ar_targets)} AR target(s), chain height {chain_height}")
 
-            # Use chan_state keyed as (chan_id, advertising_node) to track per-direction state
-            chan_state = {}  # (chan_id, adv_pubkey) -> {'fee_ppm': int, 'disabled': bool}
+            # Deduplicate: track which (chan_id, direction) we've already processed
+            chan_state = {}  # (chan_id, adv_pubkey) -> True
 
             for update in stub.SubscribeChannelGraph(ln.GraphTopologySubscription()):
                 # Periodically refresh targets and settings
@@ -208,37 +208,22 @@ def main():
                     adv_disabled = cu.routing_policy.disabled
                     capacity = cu.capacity
 
-                    # Track state per (channel, advertising_node) so each direction is independent
-                    state_key = (cid, adv)
-
-                    # Determine event type
-                    prev = chan_state.get(state_key)
-                    if prev is None:
-                        # First time seeing this channel — check if it's actually
-                        # new by extracting the funding block height from chan_id.
-                        # LND chan_id format: (block_height << 40) | (tx_index << 16) | output_index
-                        funding_height = int(cid) >> 40
-                        channel_age = chain_height - funding_height if chain_height else None
-                        if channel_age is not None and channel_age < 144:
-                            event_type = 'new_channel'
-                            print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : new_channel {cid} (height {funding_height}, age {channel_age} blocks)")
-                        else:
-                            # Old channel, just seed state and skip
-                            chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
-                            continue
-                    elif prev.get('disabled') and not adv_disabled:
-                        event_type = 'chan_enabled'
-                    elif not prev.get('disabled') and adv_disabled:
-                        event_type = 'chan_disabled'
-                    elif prev.get('fee_ppm') != adv_fee_ppm:
-                        event_type = 'fee_update'
-                    else:
-                        # No meaningful change
-                        chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
+                    # Only care about genuinely new channels — skip all
+                    # fee updates and state changes on existing channels.
+                    # LND chan_id format: (block_height << 40) | (tx_index << 16) | output_index
+                    funding_height = int(cid) >> 40
+                    channel_age = chain_height - funding_height if chain_height else None
+                    if channel_age is None or channel_age >= 144:
                         continue
 
+                    # Deduplicate: only fire once per (channel, direction)
+                    state_key = (cid, adv)
+                    if state_key in chan_state:
+                        continue
+                    chan_state[state_key] = True
 
-                    chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
+                    event_type = 'new_channel'
+                    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : new_channel {cid} (height {funding_height}, age {channel_age} blocks)")
 
                     # We always want to show the other node's fee toward the target
                     # (the routing cost to reach our target through this channel).
@@ -269,24 +254,21 @@ def main():
                     target_alias = _get_alias(target_pk, stub)
                     other_alias = _get_alias(other_pk, stub) if other_pk else ''
 
-                    # Decide whether to probe
-                    should_probe = event_type in ('new_channel', 'fee_update', 'chan_enabled')
+                    # Probe the new channel
                     probe_triggered = False
-
-                    if should_probe:
-                        last_t = last_probe_time.get(target_pk, 0)
-                        if monotonic() - last_t >= cooldown:
-                            probe_triggered = True
-                            # Mark cooldown immediately to prevent duplicate dispatches
-                            last_probe_time[target_pk] = monotonic()
-                            Thread(
-                                target=_dispatch_probe,
-                                args=(stub, target_pk, target_alias, cid, event_type, last_probe_time, cooldown),
-                                daemon=True,
-                            ).start()
-                        else:
-                            remaining = int(cooldown - (monotonic() - last_t))
-                            print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : {event_type} on {target_alias} ({cid}), cooldown {remaining}s remaining")
+                    last_t = last_probe_time.get(target_pk, 0)
+                    if monotonic() - last_t >= cooldown:
+                        probe_triggered = True
+                        # Mark cooldown immediately to prevent duplicate dispatches
+                        last_probe_time[target_pk] = monotonic()
+                        Thread(
+                            target=_dispatch_probe,
+                            args=(stub, target_pk, target_alias, cid, event_type, last_probe_time, cooldown),
+                            daemon=True,
+                        ).start()
+                    else:
+                        remaining = int(cooldown - (monotonic() - last_t))
+                        print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : new_channel on {target_alias} ({cid}), cooldown {remaining}s remaining")
 
                     GraphEvent.objects.create(
                         event_type=event_type,

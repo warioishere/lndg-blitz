@@ -139,17 +139,11 @@ function restoreTab() {
 
 const eventColors = {
   'new_channel': 'w3-pale-green',
-  'fee_update': 'w3-pale-blue',
-  'chan_disabled': 'w3-pale-red',
-  'chan_enabled': 'w3-light-grey',
   'chan_closed': 'w3-pale-red',
 };
 
 const eventLabels = {
   'new_channel': 'New Channel',
-  'fee_update': 'Fee Update',
-  'chan_disabled': 'Disabled',
-  'chan_enabled': 'Enabled',
   'chan_closed': 'Closed',
 };
 
@@ -176,8 +170,7 @@ function renderEvents() {
     badge.className = 'w3-tag w3-round';
     badge.innerText = eventLabels[ev.event_type] || ev.event_type;
     if (ev.event_type === 'new_channel') badge.classList.add('w3-green');
-    else if (ev.event_type === 'fee_update') badge.classList.add('w3-blue');
-    else if (ev.event_type === 'chan_disabled' || ev.event_type === 'chan_closed') badge.classList.add('w3-red');
+    else if (ev.event_type === 'chan_closed') badge.classList.add('w3-red');
     else badge.classList.add('w3-grey');
     typeCell.appendChild(badge);
     // Policy node (whose policy this update is about)
