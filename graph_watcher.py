@@ -197,9 +197,9 @@ def main():
                         continue
 
                     cid = str(cu.chan_id)
-                    fee_ppm = cu.routing_policy.fee_rate_milli_msat
-                    base_fee = cu.routing_policy.fee_base_msat
-                    disabled = cu.routing_policy.disabled
+                    adv_fee_ppm = cu.routing_policy.fee_rate_milli_msat
+                    adv_base_fee = cu.routing_policy.fee_base_msat
+                    adv_disabled = cu.routing_policy.disabled
                     capacity = cu.capacity
 
                     # Track state per (channel, advertising_node) so each direction is independent
@@ -209,18 +209,44 @@ def main():
                     prev = chan_state.get(state_key)
                     if prev is None:
                         event_type = 'new_channel'
-                    elif prev.get('disabled') and not disabled:
+                    elif prev.get('disabled') and not adv_disabled:
                         event_type = 'chan_enabled'
-                    elif not prev.get('disabled') and disabled:
+                    elif not prev.get('disabled') and adv_disabled:
                         event_type = 'chan_disabled'
-                    elif prev.get('fee_ppm') != fee_ppm:
+                    elif prev.get('fee_ppm') != adv_fee_ppm:
                         event_type = 'fee_update'
                     else:
                         # No meaningful change
-                        chan_state[state_key] = {'fee_ppm': fee_ppm, 'disabled': disabled}
+                        chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
                         continue
 
-                    chan_state[state_key] = {'fee_ppm': fee_ppm, 'disabled': disabled}
+                    chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
+
+                    # We always want to show the other node's fee toward the target
+                    # (the routing cost to reach our target through this channel).
+                    if adv == other_pk:
+                        # The other node advertised — its fee IS the routing fee to target
+                        fee_ppm = adv_fee_ppm
+                        base_fee = adv_base_fee
+                        disabled = adv_disabled
+                    else:
+                        # The target advertised its own policy — look up the other
+                        # node's fee for this channel via GetChanInfo
+                        fee_ppm = adv_fee_ppm
+                        base_fee = adv_base_fee
+                        disabled = adv_disabled
+                        try:
+                            info = stub.GetChanInfo(ln.ChanInfoRequest(chan_id=int(cid)))
+                            if info.node1_pub == other_pk:
+                                fee_ppm = info.node1_policy.fee_rate_milli_msat
+                                base_fee = info.node1_policy.fee_base_msat
+                                disabled = info.node1_policy.disabled
+                            elif info.node2_pub == other_pk:
+                                fee_ppm = info.node2_policy.fee_rate_milli_msat
+                                base_fee = info.node2_policy.fee_base_msat
+                                disabled = info.node2_policy.disabled
+                        except Exception:
+                            pass  # Fall back to advertiser's fee if lookup fails
 
                     target_alias = _get_alias(target_pk, stub)
                     other_alias = _get_alias(other_pk, stub) if other_pk else ''
