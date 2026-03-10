@@ -64,6 +64,9 @@ def _trigger_probe(stub, target_pubkey):
     targets = Channels.objects.filter(is_open=True, auto_rebalance=True, remote_pubkey=target_pubkey)
     if not targets.exists():
         return 0
+    # Skip if all target channels are already full (no remote balance to pull in)
+    if not any(ch.remote_balance > ch.local_chan_reserve for ch in targets):
+        return 0
     outbound_cans = list(
         Channels.objects.filter(is_open=True)
         .exclude(auto_rebalance=True, ar_source=False)
