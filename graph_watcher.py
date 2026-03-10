@@ -28,9 +28,14 @@ def _ensure_setting(key, default):
 
 
 def _load_ar_targets():
-    """Return set of remote_pubkeys from channels with auto_rebalance=True."""
+    """Return set of remote_pubkeys from AR channels, minus GW-Exclude list."""
+    excluded = set()
+    raw = _get_setting('GW-Exclude', '')
+    if raw:
+        excluded = set(pk.strip() for pk in raw.split(',') if pk.strip())
     return set(
         Channels.objects.filter(is_open=True, auto_rebalance=True)
+        .exclude(remote_pubkey__in=excluded)
         .values_list('remote_pubkey', flat=True)
     )
 

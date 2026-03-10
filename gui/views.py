@@ -2097,9 +2097,13 @@ def graph_watcher_page(request):
         def _setting(key, default=''):
             s = LocalSettings.objects.filter(key=key).first()
             return s.value if s else default
+        import json as _json
+        raw_exclude = _setting('GW-Exclude', '')
+        gw_exclude = [pk.strip() for pk in raw_exclude.split(',') if pk.strip()]
         context = {
             'gw_enabled': _setting('GW-Enabled', '0') != '0',
             'gw_cooldown': _setting('GW-Cooldown', '300'),
+            'gw_exclude_json': _json.dumps(gw_exclude),
             'graph_links': graph_links(),
             'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
         }

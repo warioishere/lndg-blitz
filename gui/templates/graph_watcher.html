@@ -48,6 +48,7 @@
         <tr>
           <th>Alias</th>
           <th>Pubkey</th>
+          <th>Watching</th>
         </tr>
       </thead>
       <tbody id="watchedTargetsTable"></tbody>
@@ -107,6 +108,8 @@
 <script>
 const GRAPH_LINKS = '{{ graph_links }}';
 const NETWORK = '{{ network }}';
+const CSRF = '{{ csrf_token }}';
+let gwExcluded = new Set({{ gw_exclude_json|safe }}.map(String));
 
 function openTab(evt, name) {
   document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
@@ -256,13 +259,15 @@ async function loadWatchedTargets() {
   if (entries.length === 0) {
     const row = table.insertRow();
     const cell = row.insertCell();
-    cell.colSpan = 2;
+    cell.colSpan = 3;
     cell.innerText = 'No AR targets configured';
     cell.className = 'w3-text-grey';
     return;
   }
   entries.forEach(([pk, alias]) => {
     const row = table.insertRow();
+    const excluded = gwExcluded.has(pk);
+    if (excluded) row.className = 'w3-pale-red';
     const aliasCell = row.insertCell();
     const link = document.createElement('a');
     link.href = GRAPH_LINKS + '/' + NETWORK + 'node/' + pk;
@@ -270,7 +275,30 @@ async function loadWatchedTargets() {
     link.innerText = alias;
     aliasCell.appendChild(link);
     row.insertCell().innerText = pk;
+    const toggleCell = row.insertCell();
+    const btn = document.createElement('button');
+    btn.className = excluded
+      ? 'w3-button w3-small w3-red w3-round'
+      : 'w3-button w3-small w3-green w3-round';
+    btn.innerText = excluded ? 'Excluded' : 'Watching';
+    btn.onclick = () => toggleExclude(pk);
+    toggleCell.appendChild(btn);
   });
+}
+
+async function toggleExclude(pubkey) {
+  if (gwExcluded.has(pubkey)) {
+    gwExcluded.delete(pubkey);
+  } else {
+    gwExcluded.add(pubkey);
+  }
+  const value = Array.from(gwExcluded).join(',');
+  const form = new URLSearchParams();
+  form.append('key', 'GW-Exclude');
+  form.append('value', value);
+  form.append('csrfmiddlewaretoken', CSRF);
+  await fetch('/update_setting/', {method: 'POST', body: form});
+  loadWatchedTargets();
 }
 
 async function loadSettings() {
