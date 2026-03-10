@@ -9,7 +9,7 @@ django.setup()
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
-from gui.models import Channels, LocalSettings, Peers, GraphEvent
+from gui.models import Channels, LocalSettings, Peers, GraphEvent, Rebalancer
 from jobs import probe_targets
 
 
@@ -41,7 +41,10 @@ def _get_alias(pubkey):
 
 
 def _trigger_probe(stub, target_pubkey):
-    """Run probe_targets for a single target pubkey. Returns number of new routes."""
+    """Run probe_targets for a single target pubkey.
+    If routes are found, schedule a rebalance regardless of whether the
+    channel has reached its ar_in_target% threshold.
+    Returns number of new routes."""
     targets = Channels.objects.filter(is_open=True, auto_rebalance=True, remote_pubkey=target_pubkey)
     if not targets.exists():
         return 0
@@ -56,8 +59,47 @@ def _trigger_probe(stub, target_pubkey):
     )
     max_fee_rate = int(_get_setting('AR-MaxFeeRate', '500'))
     max_per_target = int(_get_setting('QR-MaxPerTarget', '5'))
-    total_new, _, _, _ = probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target)
+    total_new, total_existing, _, _ = probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target)
+
+    if total_new + total_existing > 0:
+        _schedule_rebalance(target_pubkey, targets, outbound_cans, source_fee_map, max_fee_rate)
+
     return total_new
+
+
+def _schedule_rebalance(target_pubkey, targets, outbound_cans, source_fee_map, max_fee_rate):
+    """Schedule a rebalance for the target, bypassing the ar_in_target% check.
+
+    Normally auto_schedule() only rebalances when inbound% >= ar_in_target%.
+    Here we schedule unconditionally because the graph watcher already found
+    a viable route worth exploiting."""
+    # Don't stack up jobs if one is already pending or in-flight for this target
+    if Rebalancer.objects.filter(last_hop_pubkey=target_pubkey, status__in=[0, 1]).exists():
+        return
+
+    # Pick the first target channel for amount/fee calculation
+    ch = targets.first()
+    if not ch or ch.remote_balance <= ch.local_chan_reserve:
+        return
+
+    target_time = int(_get_setting('AR-Time', '5'))
+    min_source_fee = min(source_fee_map.values()) if source_fee_map else 0
+    spread = max(0, ch.local_fee_rate - min_source_fee)
+    fee_rate = min(max_fee_rate, int(spread * (ch.ar_max_cost / 100)))
+    if fee_rate <= 0:
+        return
+
+    fee_limit = round(fee_rate * ch.ar_amt_target * 0.000001, 3)
+
+    Rebalancer(
+        value=ch.ar_amt_target,
+        fee_limit=fee_limit,
+        outgoing_chan_ids=str(outbound_cans).replace('\'', ''),
+        last_hop_pubkey=target_pubkey,
+        target_alias=ch.alias,
+        duration=target_time,
+    ).save()
+    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : Scheduled rebalance for {ch.alias}: {ch.ar_amt_target} sats @ max {fee_rate} ppm (bypassing ar_in_target)")
 
 
 def _dispatch_probe(stub, target_pk, target_alias, cid, event_type, last_probe_time, cooldown):
