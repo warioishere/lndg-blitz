@@ -158,13 +158,19 @@ def main():
             connection = get_shared_channel()
             stub = lnrpc.LightningStub(connection)
 
+            # Get current block height to distinguish new channels from old ones
+            try:
+                chain_height = stub.GetInfo(ln.GetInfoRequest()).block_height
+            except Exception:
+                chain_height = 0
+
             # Load AR targets
             ar_targets = _load_ar_targets()
             last_target_refresh = monotonic()
             cooldown = int(_ensure_setting('GW-Cooldown', '300'))
             last_probe_time = {}  # pubkey -> monotonic timestamp
 
-            print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : Watching {len(ar_targets)} AR target(s)")
+            print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : Watching {len(ar_targets)} AR target(s), chain height {chain_height}")
 
             # Use chan_state keyed as (chan_id, advertising_node) to track per-direction state
             chan_state = {}  # (chan_id, adv_pubkey) -> {'fee_ppm': int, 'disabled': bool}
@@ -208,7 +214,16 @@ def main():
                     # Determine event type
                     prev = chan_state.get(state_key)
                     if prev is None:
-                        event_type = 'new_channel'
+                        # First time seeing this channel — check if it's actually
+                        # new by extracting the funding block height from chan_id.
+                        # LND chan_id format: (block_height << 40) | (tx_index << 16) | output_index
+                        funding_height = int(cid) >> 40
+                        if chain_height and chain_height - funding_height < 144:
+                            event_type = 'new_channel'
+                        else:
+                            # Old channel, just seed state and skip
+                            chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
+                            continue
                     elif prev.get('disabled') and not adv_disabled:
                         event_type = 'chan_enabled'
                     elif not prev.get('disabled') and adv_disabled:
