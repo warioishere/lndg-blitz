@@ -160,7 +160,8 @@ async function loadEvents() {
 function renderEvents() {
   const table = byId('eventsTable');
   table.innerHTML = '';
-  eventsData.forEach(ev => {
+  const filtered = eventsData.filter(ev => !gwExcluded.has(ev.target_pubkey));
+  filtered.forEach(ev => {
     const row = table.insertRow();
     row.className = eventColors[ev.event_type] || '';
     row.insertCell().innerText = formatDate(ev.timestamp);
@@ -230,16 +231,17 @@ function renderEvents() {
 }
 
 function updateStats() {
+  const visible = eventsData.filter(ev => !gwExcluded.has(ev.target_pubkey));
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const todayEvents = eventsData.filter(ev => new Date(ev.timestamp) >= today);
+  const todayEvents = visible.filter(ev => new Date(ev.timestamp) >= today);
 
   byId('stat-today-events').innerText = todayEvents.length;
   byId('stat-today-probes').innerText = todayEvents.filter(ev => ev.probe_triggered).length;
   byId('stat-today-routes').innerText = todayEvents.reduce((s, ev) => s + ev.routes_found, 0);
 
-  byId('stat-total-events').innerText = eventsData.length;
-  byId('stat-total-routes').innerText = eventsData.reduce((s, ev) => s + ev.routes_found, 0);
+  byId('stat-total-events').innerText = visible.length;
+  byId('stat-total-routes').innerText = visible.reduce((s, ev) => s + ev.routes_found, 0);
 }
 
 async function loadWatchedTargets() {
