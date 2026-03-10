@@ -165,7 +165,7 @@ class UpdatePending(forms.Form):
 
 class UpdateSetting(forms.Form):
     key = forms.CharField(label='setting', max_length=20)
-    value = forms.CharField(label='value', max_length=50)
+    value = forms.CharField(label='value', max_length=2000)
 
 class BatchOpenForm(forms.Form):
     pubkey1 = forms.CharField(label='pubkey1', max_length=66, required=False)

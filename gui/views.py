@@ -3267,6 +3267,22 @@ def update_setting(request):
                 setting, _ = LocalSettings.objects.get_or_create(key='QR-LastProbe', defaults={'value': value})
                 setting.value = value
                 setting.save()
+            elif key == 'GW-Enabled':
+                target = '1' if str(value) == '1' else '0'
+                setting, _ = LocalSettings.objects.get_or_create(key='GW-Enabled', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Graph Watcher ' + ('enabled' if target == '1' else 'disabled'))
+            elif key == 'GW-Cooldown':
+                target = int(value)
+                setting, _ = LocalSettings.objects.get_or_create(key='GW-Cooldown', defaults={'value': target})
+                setting.value = target
+                setting.save()
+                messages.success(request, 'Graph Watcher cooldown updated to: ' + str(target) + 's')
+            elif key == 'GW-Exclude':
+                setting, _ = LocalSettings.objects.get_or_create(key='GW-Exclude', defaults={'value': value})
+                setting.value = value
+                setting.save()
             else:
                 messages.error(request, 'Invalid Request. Please try again. [' + key +']')
         else:
