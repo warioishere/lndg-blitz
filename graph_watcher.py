@@ -10,6 +10,7 @@ from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
 from gui.models import Channels, LocalSettings, Peers, GraphEvent, Rebalancer
+from gui.node_cache import get_node_info_cached
 from jobs import probe_targets
 
 
@@ -40,9 +41,19 @@ def _load_ar_targets():
     )
 
 
-def _get_alias(pubkey):
+def _get_alias(pubkey, stub=None):
+    """Resolve alias via Peers table, then node cache, then truncated pubkey."""
     p = Peers.objects.filter(pubkey=pubkey).values_list('alias', flat=True).first()
-    return p or pubkey[:12]
+    if p:
+        return p
+    if stub:
+        try:
+            info = get_node_info_cached(pubkey, stub)
+            if info.node.alias:
+                return info.node.alias
+        except Exception:
+            pass
+    return pubkey[:12]
 
 
 def _trigger_probe(stub, target_pubkey):
@@ -208,8 +219,8 @@ def main():
 
                     chan_state[state_key] = {'fee_ppm': fee_ppm, 'disabled': disabled}
 
-                    target_alias = _get_alias(target_pk)
-                    other_alias = _get_alias(other_pk) if other_pk else ''
+                    target_alias = _get_alias(target_pk, stub)
+                    other_alias = _get_alias(other_pk, stub) if other_pk else ''
 
                     # Decide whether to probe
                     should_probe = event_type in ('new_channel', 'fee_update', 'chan_enabled')
@@ -271,8 +282,8 @@ def main():
                     if not target_pk:
                         continue
 
-                    target_alias = _get_alias(target_pk)
-                    other_alias = _get_alias(other_pk) if other_pk else ''
+                    target_alias = _get_alias(target_pk, stub)
+                    other_alias = _get_alias(other_pk, stub) if other_pk else ''
 
                     print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : chan_closed {cid} involving {target_alias}")
                     GraphEvent.objects.create(
