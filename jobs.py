@@ -1063,6 +1063,13 @@ def probe_routes_job(stub):
         .exclude(auto_rebalance=True, ar_source=False)
         .values_list('chan_id', flat=True)
     )
+    # Build source fee rate map for spread-based budget calculation
+    source_fee_map = dict(
+        Channels.objects.filter(chan_id__in=outbound_cans)
+        .values_list('chan_id', 'local_fee_rate')
+    )
+    max_fee_rate = int(LocalSettings.objects.filter(key='AR-MaxFeeRate').values_list('value', flat=True).first() or 500)
+    probe_buffer_ppm = 100
     probed_pubkeys = set()
     total_new = 0
     total_existing = 0
@@ -1079,12 +1086,20 @@ def probe_routes_job(stub):
         out_chans = [c for c in outbound_cans if c not in
                      set(Channels.objects.filter(remote_pubkey=ch.remote_pubkey).values_list('chan_id', flat=True))]
         for out_chan in out_chans[:max_per_target]:
+            # Compute spread-based budget + buffer for this (target, source) pair
+            source_fee_rate = source_fee_map.get(out_chan, 0)
+            spread = max(0, ch.local_fee_rate - source_fee_rate)
+            budget_ppm = min(max_fee_rate, int(spread * (ch.ar_max_cost / 100)))
+            fee_limit_sat = int((budget_ppm + probe_buffer_ppm) * ch.ar_amt_target / 1000000)
+            if fee_limit_sat <= 0:
+                continue
             try:
                 response = stub.QueryRoutes(
                     ln.QueryRoutesRequest(
                         pub_key=ch.remote_pubkey,
                         amt=ch.ar_amt_target,
                         outgoing_chan_id=int(out_chan),
+                        fee_limit=ln.FeeLimit(fixed=fee_limit_sat),
                         use_mission_control=True,
                     )
                 )
@@ -1103,12 +1118,19 @@ def probe_routes_job(stub):
                     cltv = route.hops[-1].expiry - route.hops[-2].expiry
                 else:
                     cltv = 144
-                _, created = RebalanceRoute.objects.get_or_create(
+                # Calculate fee ppm from route data
+                fee_ppm = None
+                if route.total_amt_msat and route.total_fees_msat:
+                    fee_ppm = (route.total_fees_msat / route.total_amt_msat) * 1000000
+                obj, created = RebalanceRoute.objects.get_or_create(
                     target_pubkey=ch.remote_pubkey,
                     outgoing_chan_id=route_out_chan,
                     route=path,
-                    defaults={"final_cltv_delta": cltv, "route_hex": route_hex},
+                    defaults={"final_cltv_delta": cltv, "route_hex": route_hex, "last_fee_ppm": fee_ppm},
                 )
+                if not created and fee_ppm is not None:
+                    obj.last_fee_ppm = fee_ppm
+                    obj.save(update_fields=['last_fee_ppm'])
                 if created:
                     target_new += 1
                 else:

@@ -208,9 +208,9 @@ def saved_routes_enabled():
 def get_saved_routes(pubkey, chan_ids, limit=10):
     try:
         cutoff = timezone.now() - timedelta(minutes=30)
-        # Fetch more candidates than needed so reputation + diversity can re-rank
+        # Fetch tested and untested candidates separately so untested can be randomized
         fetch_limit = max(limit * 3, 30)
-        candidates = list(
+        base_qs = (
             RebalanceRoute.objects
             .filter(target_pubkey=pubkey, outgoing_chan_id__in=chan_ids)
             .filter(Q(last_failure__lt=cutoff) | Q(last_failure__isnull=True))
@@ -223,8 +223,22 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
                     output_field=IntegerField(),
                 ),
             )
-            .order_by('-is_untested', '-weighted_ratio')[:fetch_limit]
         )
+        # Fetch truly untested (no fee data) randomized, then fee-known untested, then tested
+        truly_untested = list(
+            base_qs.filter(success_count=0, failure_count=0, last_fee_ppm__isnull=True)
+            .order_by('?')[:fetch_limit]
+        )
+        fee_known_untested = list(
+            base_qs.filter(success_count=0, failure_count=0, last_fee_ppm__isnull=False)
+            .order_by('last_fee_ppm')[:fetch_limit]
+        )
+        tested = list(
+            base_qs.exclude(success_count=0, failure_count=0)
+            .order_by('-weighted_ratio')[:fetch_limit]
+        )
+        candidates = truly_untested + fee_known_untested + tested
+        candidates = candidates[:fetch_limit]
         if not candidates:
             return []
 
@@ -256,9 +270,14 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
                 min_node_score = 0.5
 
             # Untested probed routes: score higher than low-quality tested routes
+            # If we already know the fee from a previous BuildRoute, deprioritize expensive ones
             is_untested = r.success_count == 0 and r.failure_count == 0
             if is_untested:
-                adj_score = 0.5 * min_node_score
+                if min_fee and r.last_fee_ppm and r.last_fee_ppm > 0:
+                    fee_factor = min_fee / r.last_fee_ppm
+                else:
+                    fee_factor = 1.0
+                adj_score = 0.5 * min_node_score * fee_factor
             else:
                 # Time-decay: half-life of 48 hours
                 if r.last_success:
@@ -296,14 +315,15 @@ def get_saved_routes(pubkey, chan_ids, limit=10):
             selected.append(r)
             used_hops.update(hops)
 
-        # Step 3: Ensure exploration — reserve ~50% of slots for untested routes
+        # Step 3: Ensure exploration — reserve ~50% of slots for truly untested routes
+        # (no fee data at all, never even had a BuildRoute succeed)
         min_explore = max(1, limit // 2)
-        untested_count = sum(1 for r in selected if r.success_count == 0 and r.failure_count == 0)
+        untested_count = sum(1 for r in selected if r.success_count == 0 and r.failure_count == 0 and not r.last_fee_ppm)
         if untested_count < min_explore:
             selected_ids = {r.id for r in selected}
             untested_avail = [
                 r for r, s, h in scored
-                if r.success_count == 0 and r.failure_count == 0 and r.id not in selected_ids
+                if r.success_count == 0 and r.failure_count == 0 and not r.last_fee_ppm and r.id not in selected_ids
             ]
             need = min(min_explore - untested_count, len(untested_avail))
             if need > 0:
@@ -362,6 +382,15 @@ def update_route(pubkey, chan_id, route_hex, success=True, forgive_failure=False
         route_obj.save()
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error updating route record: {str(e)}")
+
+@sync_to_async
+def update_route_fee(sr, fee_ppm):
+    """Store last_fee_ppm on a route without counting success or failure."""
+    try:
+        sr.last_fee_ppm = fee_ppm
+        sr.save(update_fields=['last_fee_ppm'])
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error updating route fee: {str(e)}")
 
 @sync_to_async
 def update_node_reputations(route_hex, success, failure_source_index=None):
@@ -576,9 +605,11 @@ async def run_rebalancer(rebalance, worker):
                     )
 
                     if build.route.total_fees_msat > fee_limit_msat:
+                        actual_ppm = (build.route.total_fees_msat / (rebalance.value * 1000)) * 1000000
                         print(
-                            f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr.outgoing_chan_id} exceeds fee limit ({build.route.total_fees_msat} > {fee_limit_msat} msat) - skipping without penalty"
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr.outgoing_chan_id} exceeds fee limit ({build.route.total_fees_msat} > {fee_limit_msat} msat, {int(actual_ppm)} ppm) - skipping without penalty"
                         )
+                        await update_route_fee(sr, actual_ppm)
                         payment_response = None
                         continue
 
