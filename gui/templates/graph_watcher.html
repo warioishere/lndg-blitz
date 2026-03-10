@@ -1,0 +1,298 @@
+{% extends "base.html" %}
+{% block title %} {{ block.super }} - Graph Watcher{% endblock %}
+{% block content %}
+<div class="w3-container w3-padding-small">
+  <h2>Graph Watcher</h2>
+  <div class="w3-bar w3-border-bottom w3-margin-bottom">
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Overview')">Overview</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Events')">Events</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Settings')">Settings</button>
+  </div>
+
+  <!-- Overview Tab -->
+  <div id="Overview" class="tabcontent" style="display:none">
+    <div class="w3-row-padding">
+      <div class="w3-third w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Status</h4>
+          <table class="w3-table">
+            <tr><td>Graph Watcher</td><td id="gw-status" class="w3-right-align">--</td></tr>
+            <tr><td>Cooldown</td><td id="gw-cooldown" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="w3-third w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>Today's Stats</h4>
+          <table class="w3-table">
+            <tr><td>Events detected</td><td id="stat-today-events" class="w3-right-align">--</td></tr>
+            <tr><td>Probes triggered</td><td id="stat-today-probes" class="w3-right-align">--</td></tr>
+            <tr><td>Routes discovered</td><td id="stat-today-routes" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="w3-third w3-margin-bottom">
+        <div class="w3-card w3-padding">
+          <h4>All-time Stats</h4>
+          <table class="w3-table">
+            <tr><td>Total events</td><td id="stat-total-events" class="w3-right-align">--</td></tr>
+            <tr><td>Total routes found</td><td id="stat-total-routes" class="w3-right-align">--</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <h4>Watched Targets</h4>
+    <table class="w3-table-all w3-centered w3-hoverable">
+      <thead>
+        <tr>
+          <th>Alias</th>
+          <th>Pubkey</th>
+        </tr>
+      </thead>
+      <tbody id="watchedTargetsTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Events Tab -->
+  <div id="Events" class="tabcontent" style="display:none">
+    <table class="w3-table-all w3-centered w3-hoverable w3-small">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Event</th>
+          <th>Policy By</th>
+          <th>Target Sink</th>
+          <th>Other Node</th>
+          <th>Capacity</th>
+          <th>Fee PPM</th>
+          <th>Disabled</th>
+          <th>Probe</th>
+          <th>Routes Found</th>
+        </tr>
+      </thead>
+      <tbody id="eventsTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Settings Tab -->
+  <div id="Settings" class="tabcontent" style="display:none">
+    <div class="w3-row-padding">
+      <div class="w3-half">
+        <div class="w3-card w3-padding w3-margin-bottom">
+          <h4>Graph Watcher Settings</h4>
+          <form class="w3-margin-bottom" action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="gw_enabled"><b>Enable Graph Watcher:</b></label>
+            <select class="w3-select w3-border" id="gw_enabled" name="value">
+              <option value="1" {% if gw_enabled %}selected{% endif %}>On</option>
+              <option value="0" {% if not gw_enabled %}selected{% endif %}>Off</option>
+            </select>
+            <input type="hidden" name="key" value="GW-Enabled">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+          <form action="/update_setting/" method="post">
+            {% csrf_token %}
+            <label for="gw_cooldown"><b>Cooldown per target</b> (seconds):</label>
+            <input class="w3-input w3-border" id="gw_cooldown" name="value" type="number" min="30" max="3600" value="{{ gw_cooldown }}">
+            <input type="hidden" name="key" value="GW-Cooldown">
+            <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const GRAPH_LINKS = '{{ graph_links }}';
+const NETWORK = '{{ network }}';
+
+function openTab(evt, name) {
+  document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tablink').forEach(el => el.classList.remove('w3-blue'));
+  document.getElementById(name).style.display = 'block';
+  if (evt) evt.currentTarget.classList.add('w3-blue');
+  localStorage.setItem('gw-tab', name);
+}
+
+function restoreTab() {
+  const valid = ['Overview', 'Events', 'Settings'];
+  const saved = localStorage.getItem('gw-tab');
+  const tab = valid.includes(saved) ? saved : 'Overview';
+  document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tablink').forEach(el => el.classList.remove('w3-blue'));
+  document.getElementById(tab).style.display = 'block';
+  document.querySelectorAll('.tablink').forEach(el => {
+    if (el.textContent.trim() === tab) el.classList.add('w3-blue');
+  });
+}
+
+const eventColors = {
+  'new_channel': 'w3-pale-green',
+  'fee_update': 'w3-pale-blue',
+  'chan_disabled': 'w3-pale-red',
+  'chan_enabled': 'w3-light-grey',
+  'chan_closed': 'w3-pale-red',
+};
+
+const eventLabels = {
+  'new_channel': 'New Channel',
+  'fee_update': 'Fee Update',
+  'chan_disabled': 'Disabled',
+  'chan_enabled': 'Enabled',
+  'chan_closed': 'Closed',
+};
+
+let eventsData = [];
+
+async function loadEvents() {
+  const res = await GET('graphevents', {data:{}});
+  // pagination_class=None returns a plain array
+  eventsData = Array.isArray(res) ? res : (res.results || []);
+  renderEvents();
+  updateStats();
+}
+
+function renderEvents() {
+  const table = byId('eventsTable');
+  table.innerHTML = '';
+  eventsData.forEach(ev => {
+    const row = table.insertRow();
+    row.className = eventColors[ev.event_type] || '';
+    row.insertCell().innerText = formatDate(ev.timestamp);
+    const typeCell = row.insertCell();
+    const badge = document.createElement('span');
+    badge.className = 'w3-tag w3-round';
+    badge.innerText = eventLabels[ev.event_type] || ev.event_type;
+    if (ev.event_type === 'new_channel') badge.classList.add('w3-green');
+    else if (ev.event_type === 'fee_update') badge.classList.add('w3-blue');
+    else if (ev.event_type === 'chan_disabled' || ev.event_type === 'chan_closed') badge.classList.add('w3-red');
+    else badge.classList.add('w3-grey');
+    typeCell.appendChild(badge);
+    // Policy node (whose policy this update is about)
+    const policyCell = row.insertCell();
+    if (ev.policy_node) {
+      if (ev.policy_node === ev.target_pubkey) {
+        policyCell.innerText = 'Target';
+        policyCell.className = 'w3-text-green';
+      } else {
+        policyCell.innerText = 'Peer';
+        policyCell.className = 'w3-text-grey';
+      }
+    } else {
+      policyCell.innerText = '---';
+    }
+    // Target sink
+    const targetCell = row.insertCell();
+    const tLink = document.createElement('a');
+    tLink.href = GRAPH_LINKS + '/' + NETWORK + 'node/' + ev.target_pubkey;
+    tLink.target = '_blank';
+    tLink.innerText = ev.target_alias || ev.target_pubkey.substring(0, 16) + '...';
+    targetCell.appendChild(tLink);
+    // Other node
+    const otherCell = row.insertCell();
+    if (ev.other_node) {
+      const oLink = document.createElement('a');
+      oLink.href = GRAPH_LINKS + '/' + NETWORK + 'node/' + ev.other_node;
+      oLink.target = '_blank';
+      oLink.innerText = ev.other_alias || ev.other_node.substring(0, 16) + '...';
+      otherCell.appendChild(oLink);
+    } else {
+      otherCell.innerText = '---';
+    }
+    row.insertCell().innerText = ev.capacity ? ev.capacity.toLocaleString() : '---';
+    row.insertCell().innerText = ev.fee_ppm != null ? ev.fee_ppm.toLocaleString() : '---';
+    row.insertCell().innerText = ev.disabled ? 'Yes' : 'No';
+    // Probe
+    const probeCell = row.insertCell();
+    if (ev.probe_triggered) {
+      probeCell.innerHTML = '<span class="w3-tag w3-green w3-tiny">Yes</span>';
+    } else {
+      probeCell.innerText = '---';
+    }
+    // Routes found - link to saved routes filtered by target
+    const routesCell = row.insertCell();
+    if (ev.routes_found > 0) {
+      const rLink = document.createElement('a');
+      rLink.href = '/rebalanceroutes';
+      rLink.target = '_blank';
+      rLink.innerText = ev.routes_found;
+      rLink.className = 'w3-text-green';
+      routesCell.appendChild(rLink);
+    } else {
+      routesCell.innerText = ev.probe_triggered ? '0' : '---';
+    }
+  });
+}
+
+function updateStats() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayEvents = eventsData.filter(ev => new Date(ev.timestamp) >= today);
+
+  byId('stat-today-events').innerText = todayEvents.length;
+  byId('stat-today-probes').innerText = todayEvents.filter(ev => ev.probe_triggered).length;
+  byId('stat-today-routes').innerText = todayEvents.reduce((s, ev) => s + ev.routes_found, 0);
+
+  byId('stat-total-events').innerText = eventsData.length;
+  byId('stat-total-routes').innerText = eventsData.reduce((s, ev) => s + ev.routes_found, 0);
+}
+
+async function loadWatchedTargets() {
+  const res = await GET('channels', {data:{}});
+  if (!res.results) return;
+  const targets = {};
+  res.results.forEach(ch => {
+    if (ch.auto_rebalance && ch.is_open) {
+      if (!targets[ch.remote_pubkey]) {
+        targets[ch.remote_pubkey] = ch.alias || ch.remote_pubkey.substring(0, 16) + '...';
+      }
+    }
+  });
+  const table = byId('watchedTargetsTable');
+  table.innerHTML = '';
+  const entries = Object.entries(targets).sort((a, b) => a[1].localeCompare(b[1]));
+  if (entries.length === 0) {
+    const row = table.insertRow();
+    const cell = row.insertCell();
+    cell.colSpan = 2;
+    cell.innerText = 'No AR targets configured';
+    cell.className = 'w3-text-grey';
+    return;
+  }
+  entries.forEach(([pk, alias]) => {
+    const row = table.insertRow();
+    const aliasCell = row.insertCell();
+    const link = document.createElement('a');
+    link.href = GRAPH_LINKS + '/' + NETWORK + 'node/' + pk;
+    link.target = '_blank';
+    link.innerText = alias;
+    aliasCell.appendChild(link);
+    row.insertCell().innerText = pk;
+  });
+}
+
+async function loadSettings() {
+  const res = await GET('settings', {data:{}});
+  if (!res.results) return;
+  const s = {};
+  res.results.forEach(r => { s[r.key] = r.value; });
+  const enabled = s['GW-Enabled'] === '1';
+  const cooldown = s['GW-Cooldown'] || '300';
+  byId('gw-status').innerHTML = enabled
+    ? '<span class="w3-tag w3-green">Enabled</span>'
+    : '<span class="w3-tag w3-red">Disabled</span>';
+  byId('gw-cooldown').innerText = cooldown + 's';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  restoreTab();
+  loadEvents();
+  loadWatchedTargets();
+  loadSettings();
+  // Auto-refresh events every 30 seconds
+  setInterval(loadEvents, 30000);
+});
+</script>
+{% endblock %}

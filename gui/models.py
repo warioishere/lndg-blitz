@@ -591,3 +591,27 @@ class AmbossPeerFees(models.Model):
 
     class Meta:
         app_label = 'gui'
+
+
+class GraphEvent(models.Model):
+    timestamp = models.DateTimeField(default=timezone.now)
+    event_type = models.CharField(max_length=30)
+    chan_id = models.CharField(max_length=20)
+    capacity = models.BigIntegerField(default=0)
+    fee_ppm = models.IntegerField(null=True)
+    base_fee_msat = models.BigIntegerField(default=0)
+    target_pubkey = models.CharField(max_length=66)
+    target_alias = models.CharField(max_length=32)
+    other_node = models.CharField(max_length=66, default='')
+    other_alias = models.CharField(max_length=32, default='')
+    disabled = models.BooleanField(default=False)
+    probe_triggered = models.BooleanField(default=False)
+    routes_found = models.IntegerField(default=0)
+    policy_node = models.CharField(max_length=66, default='')
+
+    class Meta:
+        app_label = 'gui'
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['target_pubkey'], name='graphevent_target_idx'),
+        ]

@@ -1027,48 +1027,8 @@ def agg_failed_htlcs():
     agg_htlcs(FailedHTLCs.objects.filter(timestamp__lte=time_filter, failure_detail=99)[:100], 'downstream')
     agg_htlcs(FailedHTLCs.objects.filter(timestamp__lte=time_filter).exclude(failure_detail__in=[6, 99])[:100], 'other')
 
-def probe_routes_job(stub):
-    if LocalSettings.objects.filter(key='QR-Enabled').exists():
-        if int(LocalSettings.objects.filter(key='QR-Enabled')[0].value) == 0:
-            return
-    else:
-        LocalSettings(key='QR-Enabled', value='0').save()
-        return
-    if LocalSettings.objects.filter(key='QR-UpdateHours').exists():
-        update_hours = float(LocalSettings.objects.filter(key='QR-UpdateHours')[0].value)
-    else:
-        LocalSettings(key='QR-UpdateHours', value='6').save()
-        update_hours = 6.0
-    if LocalSettings.objects.filter(key='QR-MaxPerTarget').exists():
-        max_per_target = int(LocalSettings.objects.filter(key='QR-MaxPerTarget')[0].value)
-    else:
-        LocalSettings(key='QR-MaxPerTarget', value='5').save()
-        max_per_target = 5
-    # Check if enough time has passed since last probe
-    last_probe = datetime.min
-    if LocalSettings.objects.filter(key='QR-LastProbe').exists():
-        try:
-            last_probe = datetime.fromisoformat(LocalSettings.objects.filter(key='QR-LastProbe')[0].value)
-        except Exception:
-            pass
-    if datetime.now() - last_probe < timedelta(hours=update_hours):
-        return
-    import time as _time
-    probe_start = _time.monotonic()
-    # Find auto-rebalance targets that need inbound
-    targets = Channels.objects.filter(is_open=True, auto_rebalance=True)
-    # Find outbound candidates (channels with enough liquidity to be sources)
-    outbound_cans = list(
-        Channels.objects.filter(is_open=True)
-        .exclude(auto_rebalance=True, ar_source=False)
-        .values_list('chan_id', flat=True)
-    )
-    # Build source fee rate map for spread-based budget calculation
-    source_fee_map = dict(
-        Channels.objects.filter(chan_id__in=outbound_cans)
-        .values_list('chan_id', 'local_fee_rate')
-    )
-    max_fee_rate = int(LocalSettings.objects.filter(key='AR-MaxFeeRate').values_list('value', flat=True).first() or 500)
+def probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target):
+    """Probe a queryset of AR target channels and return (total_new, total_existing, total_errors, target_details)."""
     probe_buffer_ppm = 100
     probed_pubkeys = set()
     total_new = 0
@@ -1147,10 +1107,57 @@ def probe_routes_job(stub):
             'errors': target_errors,
             'out_chans_tried': min(len(out_chans), max_per_target),
         })
+    return total_new, total_existing, total_errors, target_details
+
+def probe_routes_job(stub):
+    if LocalSettings.objects.filter(key='QR-Enabled').exists():
+        if int(LocalSettings.objects.filter(key='QR-Enabled')[0].value) == 0:
+            return
+    else:
+        LocalSettings(key='QR-Enabled', value='0').save()
+        return
+    if LocalSettings.objects.filter(key='QR-UpdateHours').exists():
+        update_hours = float(LocalSettings.objects.filter(key='QR-UpdateHours')[0].value)
+    else:
+        LocalSettings(key='QR-UpdateHours', value='6').save()
+        update_hours = 6.0
+    if LocalSettings.objects.filter(key='QR-MaxPerTarget').exists():
+        max_per_target = int(LocalSettings.objects.filter(key='QR-MaxPerTarget')[0].value)
+    else:
+        LocalSettings(key='QR-MaxPerTarget', value='5').save()
+        max_per_target = 5
+    # Check if enough time has passed since last probe
+    last_probe = datetime.min
+    if LocalSettings.objects.filter(key='QR-LastProbe').exists():
+        try:
+            last_probe = datetime.fromisoformat(LocalSettings.objects.filter(key='QR-LastProbe')[0].value)
+        except Exception:
+            pass
+    if datetime.now() - last_probe < timedelta(hours=update_hours):
+        return
+    import time as _time
+    probe_start = _time.monotonic()
+    # Find auto-rebalance targets that need inbound
+    targets = Channels.objects.filter(is_open=True, auto_rebalance=True)
+    # Find outbound candidates (channels with enough liquidity to be sources)
+    outbound_cans = list(
+        Channels.objects.filter(is_open=True)
+        .exclude(auto_rebalance=True, ar_source=False)
+        .values_list('chan_id', flat=True)
+    )
+    # Build source fee rate map for spread-based budget calculation
+    source_fee_map = dict(
+        Channels.objects.filter(chan_id__in=outbound_cans)
+        .values_list('chan_id', 'local_fee_rate')
+    )
+    max_fee_rate = int(LocalSettings.objects.filter(key='AR-MaxFeeRate').values_list('value', flat=True).first() or 500)
+    total_new, total_existing, total_errors, target_details = probe_targets(
+        stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target
+    )
     duration_ms = int((_time.monotonic() - probe_start) * 1000)
     LocalSettings.objects.update_or_create(key='QR-LastProbe', defaults={'value': datetime.now().isoformat()})
     ProbeLog.objects.create(
-        targets_scanned=len(probed_pubkeys),
+        targets_scanned=len(target_details),
         routes_found=total_new,
         routes_existing=total_existing,
         errors=total_errors,
@@ -1162,9 +1169,9 @@ def probe_routes_job(stub):
     if old_ids:
         ProbeLog.objects.filter(id__in=list(old_ids)).delete()
     if total_new:
-        print(f"{datetime.now().strftime('%c')} : [Data] : QueryRoutes probe discovered {total_new} new route(s) for {len(probed_pubkeys)} target(s)")
+        print(f"{datetime.now().strftime('%c')} : [Data] : QueryRoutes probe discovered {total_new} new route(s) for {len(target_details)} target(s)")
     else:
-        print(f"{datetime.now().strftime('%c')} : [Data] : QueryRoutes probe completed: {len(probed_pubkeys)} targets, {total_existing} existing routes, {total_errors} errors ({duration_ms}ms)")
+        print(f"{datetime.now().strftime('%c')} : [Data] : QueryRoutes probe completed: {len(target_details)} targets, {total_existing} existing routes, {total_errors} errors ({duration_ms}ms)")
 
 def main():
     channel = get_shared_channel()

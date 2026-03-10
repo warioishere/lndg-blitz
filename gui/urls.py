@@ -24,6 +24,7 @@ router.register(r'inboundfeelog', views.InboundFeeLogViewSet)
 router.register(r'rebalanceroutes', views.RebalanceRouteViewSet)
 router.register(r'nodereputation', views.NodeReputationViewSet)
 router.register(r'probelogs', views.ProbeLogViewSet)
+router.register(r'graphevents', views.GraphEventViewSet)
 
 urlpatterns = [
     path('', views.home, name='home'),
@@ -47,6 +48,7 @@ urlpatterns = [
     path('rebalances', views.rebalances, name='rebalances'),
     path('rebalancing', views.rebalancing, name='rebalancing'),
     path('rebalanceroutes', views.rebalance_routes, name='rebalance-routes'),
+    path('graphwatcher', views.graph_watcher_page, name='graph-watcher'),
     path('rebalanceroute/<int:id>', views.rebalance_route_detail, name='rebalance-route-detail'),
     path('openchannel/', views.open_channel_form, name='open-channel-form'),
     path('closechannel/', views.close_channel_form, name='close-channel-form'),

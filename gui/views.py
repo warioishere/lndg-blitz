@@ -13,7 +13,7 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
-from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, NodeReputation, ProbeLog, calc_success_ratio, calc_weighted_ratio
+from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, NodeReputation, ProbeLog, GraphEvent, calc_success_ratio, calc_weighted_ratio
 from gui.node_cache import get_node_info_cached, cache_stats
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
@@ -2092,6 +2092,22 @@ def rebalance_routes(request):
         return redirect('home')
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def graph_watcher_page(request):
+    if request.method == 'GET':
+        def _setting(key, default=''):
+            s = LocalSettings.objects.filter(key=key).first()
+            return s.value if s else default
+        context = {
+            'gw_enabled': _setting('GW-Enabled', '0') != '0',
+            'gw_cooldown': _setting('GW-Cooldown', '300'),
+            'graph_links': graph_links(),
+            'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
+        }
+        return render(request, 'graph_watcher.html', context)
+    else:
+        return redirect('home')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def rebalance_route_detail(request, id):
     if request.method == 'GET':
         try:
@@ -3512,6 +3528,13 @@ class ProbeLogViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
     queryset = ProbeLog.objects.all()
     serializer_class = ProbeLogSerializer
+
+class GraphEventViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
+    queryset = GraphEvent.objects.all()
+    serializer_class = GraphEventSerializer
+    filterset_fields = {'target_pubkey': ['exact'], 'event_type': ['exact']}
+    pagination_class = None
 
 class FailedHTLCFilter(FilterSet):
     chan_in_or_out = CharFilter(method='filter_chan_in_or_out', label='Chan In Or Out')
