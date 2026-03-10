@@ -2108,6 +2108,11 @@ def graph_watcher_page(request):
             'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
         }
         return render(request, 'graph_watcher.html', context)
+    elif request.method == 'POST' and request.POST.get('action') == 'purge_events':
+        count = GraphEvent.objects.count()
+        GraphEvent.objects.all().delete()
+        messages.success(request, f'Purged {count} graph watcher events.')
+        return redirect('graph-watcher')
     else:
         return redirect('home')
 

@@ -99,6 +99,12 @@
             <input type="hidden" name="key" value="GW-Cooldown">
             <button type="submit" class="w3-button w3-blue w3-margin-top">Save</button>
           </form>
+          <hr>
+          <form action="/graphwatcher" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="purge_events">
+            <button type="submit" class="w3-button w3-red w3-margin-top" onclick="return confirm('Delete all graph watcher events?')">Purge All Events</button>
+          </form>
         </div>
       </div>
     </div>

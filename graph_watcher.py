@@ -218,8 +218,10 @@ def main():
                         # new by extracting the funding block height from chan_id.
                         # LND chan_id format: (block_height << 40) | (tx_index << 16) | output_index
                         funding_height = int(cid) >> 40
-                        if chain_height and chain_height - funding_height < 144:
+                        channel_age = chain_height - funding_height if chain_height else None
+                        if channel_age is not None and channel_age < 144:
                             event_type = 'new_channel'
+                            print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : new_channel {cid} (height {funding_height}, age {channel_age} blocks)")
                         else:
                             # Old channel, just seed state and skip
                             chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
@@ -234,6 +236,7 @@ def main():
                         # No meaningful change
                         chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
                         continue
+
 
                     chan_state[state_key] = {'fee_ppm': adv_fee_ppm, 'disabled': adv_disabled}
 
