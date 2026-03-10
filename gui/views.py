@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
@@ -3491,6 +3491,13 @@ class RebalanceRouteViewSet(viewsets.ReadOnlyModelViewSet):
         route = get_object_or_404(self.queryset, pk=pk)
         route.delete()
         return Response({'message': 'Deleted'})
+
+    @action(detail=False, methods=['post'])
+    def cleanup_untested(self, request):
+        deleted, _ = RebalanceRoute.objects.filter(
+            success_count=0, failure_count=0
+        ).delete()
+        return Response({'deleted': deleted})
 
 class NodeReputationViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []

@@ -90,6 +90,7 @@
       </div>
     </div>
     <button class="w3-button w3-blue w3-margin-bottom" id="probeNowBtn" onclick="probeNow()">Probe Now</button>
+    <button class="w3-button w3-red w3-margin-bottom" id="cleanupBtn" onclick="cleanupUntested()">Clean Up Untested Routes</button>
     <h4>Probe History</h4>
     <table class="w3-table-all w3-centered w3-hoverable">
       <thead>
@@ -580,6 +581,26 @@ async function probeNow() {
       btn.className = 'w3-button w3-blue w3-margin-bottom';
     }
   }, 5000);
+}
+
+async function cleanupUntested() {
+  const probed = routesData.filter(r => r.success_count === 0 && r.failure_count === 0).length;
+  if (probed === 0) { alert('No untested routes to clean up.'); return; }
+  if (!confirm(`Delete ${probed} untested/probed route(s)? They will be re-discovered on the next probe run with proper fee data.`)) return;
+  const btn = byId('cleanupBtn');
+  btn.disabled = true;
+  btn.innerText = 'Cleaning up...';
+  const token = document.getElementById('api').dataset.token;
+  const res = await fetch('/api/rebalanceroutes/cleanup_untested/', {
+    method: 'POST',
+    headers: {'X-CSRFToken': token},
+  });
+  const data = await res.json();
+  btn.disabled = false;
+  btn.innerText = 'Clean Up Untested Routes';
+  alert(`Deleted ${data.deleted} untested route(s).`);
+  routesLoaded = loadRoutes();
+  await loadProbeData();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
