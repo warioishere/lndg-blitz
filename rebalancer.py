@@ -375,7 +375,7 @@ def update_route(pubkey, chan_id, route_hex, success=True, forgive_failure=False
             if forgive_failure and route_obj.failure_count > 0:
                 route_obj.failure_count -= 1
             if parsed.total_amt_msat and parsed.total_fees_msat:
-                route_obj.last_fee_ppm = (parsed.total_fees_msat / parsed.total_amt_msat) * 1000000
+                route_obj.last_fee_ppm = (parsed.total_fees_msat / (parsed.total_amt_msat - parsed.total_fees_msat)) * 1000000
         else:
             route_obj.failure_count += 1
             route_obj.last_failure = now
@@ -430,6 +430,11 @@ def purge_stale_routes():
     try:
         if get_local_setting('RR-CollectRoutes', '1', str) == '0':
             return
+        # Delete routes whose outgoing channel is no longer open
+        open_chan_ids = set(Channels.objects.filter(is_open=True).values_list('chan_id', flat=True))
+        dead_routes = RebalanceRoute.objects.exclude(outgoing_chan_id__in=open_chan_ids).delete()
+        if dead_routes[0]:
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Purged {dead_routes[0]} routes for closed outgoing channels")
         cutoff = timezone.now() - timedelta(days=7)
         # Delete tested routes with no recent success, but keep untested
         # probed routes so they get a chance to be tried first

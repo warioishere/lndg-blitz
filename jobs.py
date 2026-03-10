@@ -1121,7 +1121,7 @@ def probe_routes_job(stub):
                 # Calculate fee ppm from route data
                 fee_ppm = None
                 if route.total_amt_msat and route.total_fees_msat:
-                    fee_ppm = (route.total_fees_msat / route.total_amt_msat) * 1000000
+                    fee_ppm = (route.total_fees_msat / (route.total_amt_msat - route.total_fees_msat)) * 1000000
                 obj, created = RebalanceRoute.objects.get_or_create(
                     target_pubkey=ch.remote_pubkey,
                     outgoing_chan_id=route_out_chan,
