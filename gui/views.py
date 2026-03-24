@@ -2266,6 +2266,57 @@ def inbound_offset(request):
         }
         return render(request, 'inbound_offset.html', context)
     elif request.method == 'POST':
+        if request.POST.get('bulk') == '1':
+            # Bulk offset adjustment
+            try:
+                delta = int(request.POST.get('delta_offset', 0))
+            except (TypeError, ValueError):
+                messages.error(request, 'Invalid offset delta.')
+                return redirect('inbound-offset')
+            selected = request.POST.getlist('channels')
+            queryset = Channels.objects.filter(chan_id__in=selected) if selected else Channels.objects.filter(is_open=True)
+            channels = list(queryset)
+            stub = lnrpc.LightningStub(lnd_connect())
+            try:
+                version = stub.GetInfo(ln.GetInfoRequest()).version
+                if float(version[:4]) < 0.18:
+                    messages.error(request, 'LND version too low to set inbound fees, update to v0.18+')
+                    return redirect('inbound-offset')
+            except Exception as e:
+                messages.error(request, f'Error checking LND version: {e}')
+                return redirect('inbound-offset')
+            updated = 0
+            for ch in channels:
+                new_offset = (ch.inbound_offset or 0) + delta
+                if new_offset > 0:
+                    new_offset = 0
+                ch.inbound_offset = new_offset
+                balance = ch.local_fee_rate + new_offset
+                target = -balance if balance > 0 else 0
+                target_fee_rate = int(round(target))
+                try:
+                    channel_point = point(ch)
+                    inbound_base_fee = ch.local_inbound_base_fee if ch.local_inbound_base_fee else 0
+                    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(
+                        chan_point=channel_point,
+                        base_fee_msat=ch.local_base_fee,
+                        fee_rate=(ch.local_fee_rate/1000000),
+                        time_lock_delta=ch.local_cltv,
+                        inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target_fee_rate)
+                    ))
+                    old_rate = ch.local_inbound_fee_rate if ch.local_inbound_fee_rate else 0
+                    ch.local_inbound_fee_rate = target_fee_rate
+                    ch.offset_updated = datetime.now()
+                    ch.save()
+                    if old_rate != target_fee_rate:
+                        InboundFeeLog(chan_id=ch.chan_id, peer_alias=ch.alias,
+                                      setting='Bulk Offset', old_value=old_rate, new_value=target_fee_rate).save()
+                    updated += 1
+                except Exception as e:
+                    messages.error(request, f'Error updating {ch.alias}: {e}')
+            messages.success(request, f'Inbound offset adjusted by {delta:+d} for {updated} channel(s).')
+            return redirect('inbound-offset')
+        # Single-channel offset update
         form = InboundOffsetForm(request.POST)
         if form.is_valid() and Channels.objects.filter(chan_id=form.cleaned_data['chan_id']).exists():
             chan_id = form.cleaned_data['chan_id']

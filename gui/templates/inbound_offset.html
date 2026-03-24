@@ -5,21 +5,33 @@
 {% if channels %}
 <div class="w3-container w3-padding-small">
   <h2>Inbound Offset</h2>
-  <div class="w3-container w3-padding-small" style="overflow-x: scroll">
+  <form method="post" id="bulkForm">
+    {% csrf_token %}
+    <input type="hidden" name="bulk" value="1">
+    <div class="w3-bar w3-border" style="margin-bottom:8px;display:flex;align-items:center;justify-content:center;">
+      <label class="w3-bar-item">Δ Offset:</label>
+      <input class="w3-bar-item" type="number" name="delta_offset" value="0" style="width:100px;text-align:center">
+      <button class="w3-bar-item w3-button w3-green" type="submit">Apply</button>
+      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="toggleAll(true);return false;">Select All</a>
+      <a href="#" class="w3-bar-item w3-button w3-blue" onclick="toggleAll(false);return false;">Clear</a>
+    </div>
+  <div class="w3-container w3-padding-small" style="overflow-x:auto;max-height:800px">
     <table class="w3-table-all w3-centered w3-hoverable">
       <tr>
-        <th onclick="sortTable(event.target, 0, 'String', 0, 'a')">Channel ID</th>
-        <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Peer Alias</th>
-        <th onclick="sortTable(event.target, 2, 'int')">Outbound PPM</th>
+        <th></th>
+        <th onclick="sortTable(event.target, 1, 'String', 0, 'a')">Channel ID</th>
+        <th onclick="sortTable(event.target, 2, 'String', 0, 'a')">Peer Alias</th>
+        <th onclick="sortTable(event.target, 3, 'int')">Outbound PPM</th>
         <th>Inbound Offset</th>
       </tr>
       {% for channel in channels %}
       <tr>
+        <td><input type="checkbox" class="chanbox" name="channels" value="{{ channel.chan_id }}"></td>
         <td title="{{ channel.funding_txid }}:{{ channel.output_index }}"><a href="/channel?={{ channel.chan_id }}" target="_blank">{{ channel.short_chan_id }}</a></td>
         <td title="{{ channel.remote_pubkey }}">{% if channel.private == False %}<a href="{{ graph_links }}/{{ network }}node/{{ channel.remote_pubkey }}" target="_blank">{% endif %}{% if channel.alias == '' %}{{ channel.remote_pubkey|slice:":12" }}{% else %}{{ channel.alias }}{% endif %}{% if channel.private == False %}</a>{% endif %}</td>
         <td>{{ channel.local_fee_rate|intcomma }}</td>
         <td>
-          <form action="/inbound-offset/" method="post">
+          <form action="/inbound-offset/" method="post" style="display:inline">
             {% csrf_token %}
             <input style="text-align:center" type="number" min="-100000" max="0" name="offset" value="{{ channel.inbound_offset|default:0 }}">
             <input type="hidden" name="chan_id" value="{{ channel.chan_id }}">
@@ -29,6 +41,7 @@
       {% endfor %}
     </table>
   </div>
+  </form>
 </div>
 {% else %}
 <div class="w3-container w3-padding-small">
@@ -38,4 +51,9 @@
 {% if local_settings %}
 {% include 'local_settings.html' with settings=local_settings title='Inbound Offset' %}
 {% endif %}
+<script>
+function toggleAll(val){
+  document.querySelectorAll('.chanbox').forEach(cb => cb.checked = val);
+}
+</script>
 {% endblock %}
