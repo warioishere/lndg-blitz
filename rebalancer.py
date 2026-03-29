@@ -789,6 +789,8 @@ async def run_rebalancer(rebalance, worker):
                                         timeout=timeout,
                                     )
                                     if probe_response.status == 1:  # SUCCEEDED
+                                        # Scale fee_limit proportionally so RapidFire children keep the same ppm
+                                        rebalance.fee_limit = round(rebalance.fee_limit * (probed / rebalance.value), 3)
                                         rebalance.value = probed
                                         rebalance.status = 2
                                         rebalance.payment_hash = probe_invoice.r_hash.hex()
@@ -896,7 +898,7 @@ async def run_rebalancer(rebalance, worker):
                 inbound_cans = auto_rebalance_channels.filter(remote_pubkey=rebalance.last_hop_pubkey).filter(auto_rebalance=True, inbound_can__gte=1)
                 outbound_cans = await get_out_cans(rebalance, auto_rebalance_channels)
                 if await inbound_cans_len(inbound_cans) > 0 and len(outbound_cans) > 0:
-                    next_rebalance = Rebalancer(value=int(rebalance.value*inc), fee_limit=round(rebalance.fee_limit*inc, 3), outgoing_chan_ids=str(outbound_cans).replace('\'', ''), last_hop_pubkey=rebalance.last_hop_pubkey, target_alias=original_alias, duration=1)
+                    next_rebalance = Rebalancer(value=int(rebalance.value*inc), fee_limit=round(rebalance.fee_limit*inc, 3), outgoing_chan_ids=str(outbound_cans).replace('\'', ''), last_hop_pubkey=rebalance.last_hop_pubkey, target_alias=original_alias, duration=1, status=1)
                     await save_record(next_rebalance)
                     print(f"{datetime.now().strftime('%c')} : [Rebalancer] : RapidFire increase for {next_rebalance.target_alias} from {rebalance.value} to {next_rebalance.value}")
                 else:
@@ -914,7 +916,7 @@ async def run_rebalancer(rebalance, worker):
 
                 inbound_cans = auto_rebalance_channels.filter(remote_pubkey=rebalance.last_hop_pubkey).filter(auto_rebalance=True, inbound_can__gte=1)
                 if await inbound_cans_len(inbound_cans) > 0 and len(outbound_cans) > 0:
-                    next_rebalance = Rebalancer(value=int(next_value), fee_limit=round(rebalance.fee_limit/(rebalance.value/next_value), 3), outgoing_chan_ids=str(outbound_cans).replace('\'', ''), last_hop_pubkey=rebalance.last_hop_pubkey, target_alias=original_alias, duration=1)
+                    next_rebalance = Rebalancer(value=int(next_value), fee_limit=round(rebalance.fee_limit/(rebalance.value/next_value), 3), outgoing_chan_ids=str(outbound_cans).replace('\'', ''), last_hop_pubkey=rebalance.last_hop_pubkey, target_alias=original_alias, duration=1, status=1)
                     await save_record(next_rebalance)
                     print(f"{datetime.now().strftime('%c')} : [Rebalancer] : RapidFire decrease for {next_rebalance.target_alias} from {rebalance.value} to {next_rebalance.value}")
                 else:
@@ -1044,8 +1046,7 @@ def auto_schedule() -> List[Rebalancer]:
                 if not target:
                     continue
                 source_fee_rate = source_fee_rate_map.get(source_id, 0)
-                spread = max(0, target.local_fee_rate - source_fee_rate)
-                target_fee_rate = min(max_fee_rate, int(spread * (target.ar_max_cost/100)))
+                target_fee_rate = min(max_fee_rate, int(target.local_fee_rate * (target.ar_max_cost/100)) - source_fee_rate)
                 if target_fee_rate <= target.remote_fee_rate:
                     continue
                 target_value = int(target.ar_amt_target+(target.ar_amt_target*((secrets.choice(range(-1000,1001))/1000)*variance/100)))
@@ -1068,8 +1069,7 @@ def auto_schedule() -> List[Rebalancer]:
         for target in inbound_list:
             if target.remote_pubkey in scheduled_targets:
                 continue
-            spread = max(0, target.local_fee_rate - min_source_fee_rate)
-            target_fee_rate = min(max_fee_rate, int(spread * (target.ar_max_cost/100)))
+            target_fee_rate = min(max_fee_rate, int(target.local_fee_rate * (target.ar_max_cost/100)) - min_source_fee_rate)
             if target_fee_rate > 0 and target_fee_rate > target.remote_fee_rate:
                 target_value = int(target.ar_amt_target+(target.ar_amt_target*((secrets.choice(range(-1000,1001))/1000)*variance/100)))
                 target_fee = round(target_fee_rate*target_value*0.000001, 3) if target_fee_rate <= max_fee_rate else round(max_fee_rate*target_value*0.000001, 3)

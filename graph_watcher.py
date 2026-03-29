@@ -103,8 +103,7 @@ def _schedule_rebalance(target_pubkey, targets, outbound_cans, source_fee_map, m
 
     target_time = int(_get_setting('AR-Time', '5'))
     min_source_fee = min(source_fee_map.values()) if source_fee_map else 0
-    spread = max(0, ch.local_fee_rate - min_source_fee)
-    fee_rate = min(max_fee_rate, int(spread * (ch.ar_max_cost / 100)))
+    fee_rate = min(max_fee_rate, int(ch.local_fee_rate * (ch.ar_max_cost / 100)) - min_source_fee)
     if fee_rate <= 0:
         return
 
