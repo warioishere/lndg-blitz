@@ -168,6 +168,35 @@ def inbound_cans_len(inbound_cans):
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting inbound cands: {str(e)}")
 
+def get_source_fee_map(chan_ids):
+    """Build a map of chan_id -> local_fee_rate for outbound channels."""
+    return dict(
+        Channels.objects.filter(chan_id__in=[str(c) for c in chan_ids])
+        .values_list('chan_id', 'local_fee_rate')
+    )
+
+def get_target_info(last_hop_pubkey):
+    """Return (local_fee_rate, ar_max_cost) for the target channel, or None."""
+    ch = Channels.objects.filter(
+        is_open=True, auto_rebalance=True, remote_pubkey=last_hop_pubkey
+    ).first()
+    if ch:
+        return ch.local_fee_rate, ch.ar_max_cost
+    return None, None
+
+def check_opportunity_cost(route_fee_msat, amount_sat, source_chan_id, source_fee_map, target_fee_rate, ar_max_cost, max_fee_rate):
+    """Check if route fee fits within budget after deducting source opportunity cost.
+
+    Returns (allowed, route_fee_ppm, max_route_ppm) tuple.
+    Formula: max_route_fee = (target_fee * ar_max_cost%) - source_outbound_fee
+    The source's outbound fee is an opportunity cost (lost forwarding revenue)
+    that must be subtracted from the rebalancing budget."""
+    source_fee = source_fee_map.get(str(source_chan_id), source_fee_map.get(source_chan_id, 0))
+    max_route_ppm = int(target_fee_rate * (ar_max_cost / 100)) - source_fee
+    max_route_ppm = min(max_route_ppm, max_fee_rate)
+    route_fee_ppm = int((route_fee_msat / (amount_sat * 1000)) * 1000000) if amount_sat > 0 else 0
+    return route_fee_ppm <= max_route_ppm, route_fee_ppm, max_route_ppm
+
 def get_active_rebalance_pubkeys():
     try:
         return set(
@@ -554,6 +583,36 @@ async def run_rebalancer(rebalance, worker):
             chan_ids = json.loads(rebalance.outgoing_chan_ids)
             # Filter channels: for peers with multiple channels, only send the one with lowest HTLC count
             chan_ids = sort_channels_by_htlc(stub, chan_ids)
+
+            # Load opportunity cost data for this rebalance
+            source_fee_map = get_source_fee_map(chan_ids)
+            target_fee_rate, ar_max_cost = get_target_info(rebalance.last_hop_pubkey)
+            max_fee_rate = get_local_setting('AR-MaxFeeRate', 500, int)
+            opp_cost_enabled = target_fee_rate is not None and ar_max_cost is not None
+
+            # Pre-filter outbound channels: remove those whose opportunity cost
+            # alone exceeds the budget (spread * ar_max_cost%)
+            if opp_cost_enabled and not rebalance.manual:
+                original_count = len(chan_ids)
+                filtered_ids = []
+                for cid in chan_ids:
+                    src_fee = source_fee_map.get(str(cid), source_fee_map.get(cid, 0))
+                    max_route_ppm = int(target_fee_rate * (ar_max_cost / 100)) - src_fee
+                    if max_route_ppm > 0:
+                        filtered_ids.append(cid)
+                    else:
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {cid} (outbound fee {src_fee} ppm eats entire budget for target {rebalance.target_alias})")
+                chan_ids = filtered_ids
+                if len(chan_ids) < original_count:
+                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Opportunity cost filter: {original_count} -> {len(chan_ids)} outbound channels")
+                if len(chan_ids) == 0:
+                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : No outbound channels left after opportunity cost filter")
+                    rebalance.status = 406
+                    rebalance.start = datetime.now()
+                    rebalance.stop = datetime.now()
+                    await save_record(rebalance)
+                    return None
+
             timeout = rebalance.duration * 60
             invoice_response = stub.AddInvoice(
                 ln.Invoice(value=rebalance.value, expiry=timeout)
@@ -608,6 +667,21 @@ async def run_rebalancer(rebalance, worker):
                     print(
                         f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute succeeded via {sr.outgoing_chan_id}"
                     )
+
+                    # Check opportunity cost: route_fee + source_outbound_fee must fit within per-source budget
+                    if opp_cost_enabled and not rebalance.manual:
+                        allowed, total_ppm, budget_ppm = check_opportunity_cost(
+                            build.route.total_fees_msat, rebalance.value,
+                            sr.outgoing_chan_id, source_fee_map,
+                            target_fee_rate, ar_max_cost, max_fee_rate
+                        )
+                        if not allowed:
+                            src_fee = source_fee_map.get(str(sr.outgoing_chan_id), source_fee_map.get(sr.outgoing_chan_id, 0))
+                            print(
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr.outgoing_chan_id} rejected: route {total_ppm} ppm + source {src_fee} ppm outbound, max route budget {budget_ppm} ppm (target {target_fee_rate} * {ar_max_cost}% - {src_fee} source) - skipping"
+                            )
+                            payment_response = None
+                            continue
 
                     if build.route.total_fees_msat > fee_limit_msat:
                         actual_ppm = (build.route.total_fees_msat / (rebalance.value * 1000)) * 1000000
@@ -696,7 +770,17 @@ async def run_rebalancer(rebalance, worker):
                                     )
                                 )
                                 scaled_fee_limit = fee_limit_msat * probed // rebalance.value
-                                if probe_build.route.total_fees_msat <= scaled_fee_limit:
+                                # Also check opportunity cost for probed amount
+                                opp_ok = True
+                                if opp_cost_enabled and not rebalance.manual:
+                                    opp_ok, opp_total, opp_budget = check_opportunity_cost(
+                                        probe_build.route.total_fees_msat, probed,
+                                        sr.outgoing_chan_id, source_fee_map,
+                                        target_fee_rate, ar_max_cost, max_fee_rate
+                                    )
+                                    if not opp_ok:
+                                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe via {sr.outgoing_chan_id} rejected: route {opp_total} ppm exceeds budget {opp_budget} ppm after opportunity cost")
+                                if opp_ok and probe_build.route.total_fees_msat <= scaled_fee_limit:
                                     probe_response = await routerstub.SendToRouteV2(
                                         lnr.SendToRouteRequest(
                                             payment_hash=probe_invoice.r_hash,
