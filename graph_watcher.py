@@ -56,7 +56,7 @@ def _get_alias(pubkey, stub=None):
     return pubkey[:12]
 
 
-def _trigger_probe(stub, target_pubkey):
+def _trigger_probe(stub, target_pubkey, other_pubkey=None, other_fee_ppm=None, chan_id=None):
     """Run probe_targets for a single target pubkey.
     If routes are found, schedule a rebalance regardless of whether the
     channel has reached its ar_in_target% threshold.
@@ -64,8 +64,10 @@ def _trigger_probe(stub, target_pubkey):
     targets = Channels.objects.filter(is_open=True, auto_rebalance=True, remote_pubkey=target_pubkey)
     if not targets.exists():
         return 0
+    ch = targets.first()
     # Skip if all target channels are already full (no remote balance to pull in)
-    if not any(ch.remote_balance > ch.local_chan_reserve for ch in targets):
+    if not any(c.remote_balance > c.local_chan_reserve for c in targets):
+        print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : {ch.alias} - skip, all channels full")
         return 0
     outbound_cans = list(
         Channels.objects.filter(is_open=True)
@@ -78,10 +80,31 @@ def _trigger_probe(stub, target_pubkey):
     )
     max_fee_rate = int(_get_setting('AR-MaxFeeRate', '500'))
     max_per_target = int(_get_setting('QR-MaxPerTarget', '5'))
-    total_new, total_existing, _, _ = probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target)
+
+    other_alias = _get_alias(other_pubkey, stub) if other_pubkey else '?'
+    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : Probing {ch.alias} (fee={ch.local_fee_rate} ppm) "
+          f"triggered by new channel {chan_id} from {other_alias} (fee={other_fee_ppm} ppm)")
+    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   trying {min(len(outbound_cans), max_per_target)} of {len(outbound_cans)} outbound sources, "
+          f"budget = {ch.local_fee_rate} * {ch.ar_max_cost}% = {int(ch.local_fee_rate * ch.ar_max_cost / 100)} ppm")
+
+    total_new, total_existing, total_errors, target_details = probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target)
+
+    # Log what QueryRoutes found
+    from gui.models import RebalanceRoute
+    recent_routes = RebalanceRoute.objects.filter(target_pubkey=target_pubkey).order_by('-id')[:10]
+    for rr in recent_routes:
+        hops = rr.route.split('-')
+        via_new_peer = other_pubkey in hops if other_pubkey else False
+        fee_str = f"{int(rr.last_fee_ppm)} ppm" if rr.last_fee_ppm else "? ppm"
+        marker = " ← via new peer!" if via_new_peer else ""
+        print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   route: {len(hops)} hops, {fee_str}, out={rr.outgoing_chan_id}{marker}")
+
+    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   result: {total_new} new, {total_existing} existing, {total_errors} errors")
 
     if total_new + total_existing > 0:
         _schedule_rebalance(target_pubkey, targets, outbound_cans, source_fee_map, max_fee_rate)
+    else:
+        print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   no routes found, skipping rebalance")
 
     return total_new
 
@@ -120,12 +143,11 @@ def _schedule_rebalance(target_pubkey, targets, outbound_cans, source_fee_map, m
     print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : Scheduled rebalance for {ch.alias}: {ch.ar_amt_target} sats @ max {fee_rate} ppm (bypassing ar_in_target)")
 
 
-def _dispatch_probe(stub, target_pk, target_alias, cid, event_type, last_probe_time, cooldown):
+def _dispatch_probe(stub, target_pk, target_alias, cid, event_type, last_probe_time, cooldown, other_pk=None, other_fee_ppm=None):
     """Run probe in a background thread to avoid blocking the stream."""
     try:
-        routes_found = _trigger_probe(stub, target_pk)
+        routes_found = _trigger_probe(stub, target_pk, other_pubkey=other_pk, other_fee_ppm=other_fee_ppm, chan_id=cid)
         last_probe_time[target_pk] = monotonic()
-        print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : {event_type} on {target_alias} ({cid}), probed -> {routes_found} new route(s)")
         if routes_found:
             GraphEvent.objects.filter(
                 target_pubkey=target_pk,
@@ -262,7 +284,7 @@ def main():
                         last_probe_time[target_pk] = monotonic()
                         Thread(
                             target=_dispatch_probe,
-                            args=(stub, target_pk, target_alias, cid, event_type, last_probe_time, cooldown),
+                            args=(stub, target_pk, target_alias, cid, event_type, last_probe_time, cooldown, other_pk, fee_ppm),
                             daemon=True,
                         ).start()
                     else:

@@ -1048,8 +1048,7 @@ def probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, ma
         for out_chan in out_chans[:max_per_target]:
             # Compute spread-based budget + buffer for this (target, source) pair
             source_fee_rate = source_fee_map.get(out_chan, 0)
-            spread = max(0, ch.local_fee_rate - source_fee_rate)
-            budget_ppm = min(max_fee_rate, int(spread * (ch.ar_max_cost / 100)))
+            budget_ppm = min(max_fee_rate, int(ch.local_fee_rate * (ch.ar_max_cost / 100)) - source_fee_rate)
             fee_limit_sat = int((budget_ppm + probe_buffer_ppm) * ch.ar_amt_target / 1000000)
             if fee_limit_sat <= 0:
                 continue
