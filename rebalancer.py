@@ -169,6 +169,10 @@ def inbound_cans_len(inbound_cans):
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting inbound cands: {str(e)}")
 
 @sync_to_async
+def get_max_fee_rate():
+    return get_local_setting('AR-MaxFeeRate', 500, int)
+
+@sync_to_async
 def get_source_fee_map(chan_ids):
     """Build a map of chan_id -> local_fee_rate for outbound channels."""
     return dict(
@@ -592,7 +596,7 @@ async def run_rebalancer(rebalance, worker):
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : DEBUG source_fee_map loaded: {len(source_fee_map)} entries")
             target_fee_rate, ar_max_cost = await get_target_info(rebalance.last_hop_pubkey)
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : DEBUG target_info: fee={target_fee_rate} max_cost={ar_max_cost}")
-            max_fee_rate = get_local_setting('AR-MaxFeeRate', 500, int)
+            max_fee_rate = await get_max_fee_rate()
             opp_cost_enabled = target_fee_rate is not None and ar_max_cost is not None
 
             # Pre-filter outbound channels: remove those whose opportunity cost
