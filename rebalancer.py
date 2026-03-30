@@ -591,11 +591,8 @@ async def run_rebalancer(rebalance, worker):
             chan_ids = sort_channels_by_htlc(stub, chan_ids)
 
             # Load opportunity cost data for this rebalance
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : DEBUG loading opportunity cost data for {rebalance.target_alias}")
             source_fee_map = await get_source_fee_map(chan_ids)
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : DEBUG source_fee_map loaded: {len(source_fee_map)} entries")
             target_fee_rate, ar_max_cost = await get_target_info(rebalance.last_hop_pubkey)
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : DEBUG target_info: fee={target_fee_rate} max_cost={ar_max_cost}")
             max_fee_rate = await get_max_fee_rate()
             opp_cost_enabled = target_fee_rate is not None and ar_max_cost is not None
 
@@ -934,9 +931,7 @@ async def run_rebalancer(rebalance, worker):
                 next_rebalance = None
             return next_rebalance
     except Exception as e:
-        import traceback
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error running rebalance attempt: {str(e)}")
-        traceback.print_exc()
 
 @sync_to_async
 def estimate_liquidity( payment ):
