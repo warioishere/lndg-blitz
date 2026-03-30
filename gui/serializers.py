@@ -270,5 +270,11 @@ class GraphEventSerializer(serializers.HyperlinkedModelSerializer):
         model = GraphEvent
         exclude = []
 
+class ProbeLogSerializer(serializers.HyperlinkedModelSerializer):
+    id = serializers.ReadOnlyField()
+    class Meta:
+        model = ProbeLog
+        exclude = []
+
 class ResetSerializer(serializers.Serializer):
     table = serializers.CharField(max_length=20)

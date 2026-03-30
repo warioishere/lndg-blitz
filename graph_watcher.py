@@ -9,7 +9,7 @@ django.setup()
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
-from gui.models import Channels, LocalSettings, Peers, GraphEvent, Rebalancer
+from gui.models import Channels, LocalSettings, Peers, GraphEvent, Rebalancer, ProbeLog
 from gui.node_cache import get_node_info_cached
 from jobs import probe_targets
 
@@ -82,29 +82,59 @@ def _trigger_probe(stub, target_pubkey, other_pubkey=None, other_fee_ppm=None, c
     max_per_target = int(_get_setting('QR-MaxPerTarget', '5'))
 
     other_alias = _get_alias(other_pubkey, stub) if other_pubkey else '?'
+    budget_ppm = int(ch.local_fee_rate * ch.ar_max_cost / 100)
+    sources_tried = min(len(outbound_cans), max_per_target)
     print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : Probing {ch.alias} (fee={ch.local_fee_rate} ppm) "
           f"triggered by new channel {chan_id} from {other_alias} (fee={other_fee_ppm} ppm)")
-    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   trying {min(len(outbound_cans), max_per_target)} of {len(outbound_cans)} outbound sources, "
-          f"budget = {ch.local_fee_rate} * {ch.ar_max_cost}% = {int(ch.local_fee_rate * ch.ar_max_cost / 100)} ppm")
+    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   trying {sources_tried} of {len(outbound_cans)} outbound sources, "
+          f"budget = {ch.local_fee_rate} * {ch.ar_max_cost}% = {budget_ppm} ppm")
 
     total_new, total_existing, total_errors, target_details = probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target)
 
-    # Log what QueryRoutes found
+    # Check which routes go via the new peer
     from gui.models import RebalanceRoute
     recent_routes = RebalanceRoute.objects.filter(target_pubkey=target_pubkey).order_by('-id')[:10]
+    route_lines = []
+    routes_via_new = 0
     for rr in recent_routes:
         hops = rr.route.split('-')
         via_new_peer = other_pubkey in hops if other_pubkey else False
+        if via_new_peer:
+            routes_via_new += 1
         fee_str = f"{int(rr.last_fee_ppm)} ppm" if rr.last_fee_ppm else "? ppm"
         marker = " ← via new peer!" if via_new_peer else ""
-        print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   route: {len(hops)} hops, {fee_str}, out={rr.outgoing_chan_id}{marker}")
+        line = f"{len(hops)} hops, {fee_str}, out={rr.outgoing_chan_id}{marker}"
+        route_lines.append(line)
+        print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   route: {line}")
 
-    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   result: {total_new} new, {total_existing} existing, {total_errors} errors")
+    print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   result: {total_new} new, {total_existing} existing, {total_errors} errors, {routes_via_new} via new peer")
 
+    scheduled = False
     if total_new + total_existing > 0:
         _schedule_rebalance(target_pubkey, targets, outbound_cans, source_fee_map, max_fee_rate)
+        scheduled = True
     else:
         print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   no routes found, skipping rebalance")
+
+    # Save probe log to DB
+    ProbeLog.objects.create(
+        target_pubkey=target_pubkey,
+        target_alias=ch.alias,
+        target_fee=ch.local_fee_rate,
+        target_max_cost=ch.ar_max_cost,
+        trigger_chan_id=chan_id or '',
+        other_pubkey=other_pubkey or '',
+        other_alias=other_alias,
+        other_fee_ppm=other_fee_ppm,
+        budget_ppm=budget_ppm,
+        sources_tried=sources_tried,
+        routes_new=total_new,
+        routes_existing=total_existing,
+        errors=total_errors,
+        routes_via_new_peer=routes_via_new,
+        rebalance_scheduled=scheduled,
+        details='\n'.join(route_lines),
+    )
 
     return total_new
 

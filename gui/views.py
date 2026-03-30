@@ -3612,6 +3612,12 @@ class GraphEventViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = {'target_pubkey': ['exact'], 'event_type': ['exact']}
     pagination_class = None
 
+class ProbeLogViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
+    queryset = ProbeLog.objects.all()
+    serializer_class = ProbeLogSerializer
+    pagination_class = None
+
 class FailedHTLCFilter(FilterSet):
     chan_in_or_out = CharFilter(method='filter_chan_in_or_out', label='Chan In Or Out')
     chan_id_in = CharFilter(field_name='chan_id_in', lookup_expr='exact')

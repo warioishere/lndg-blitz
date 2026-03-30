@@ -615,3 +615,26 @@ class GraphEvent(models.Model):
         indexes = [
             models.Index(fields=['target_pubkey'], name='graphevent_target_idx'),
         ]
+
+class ProbeLog(models.Model):
+    timestamp = models.DateTimeField(default=timezone.now)
+    target_pubkey = models.CharField(max_length=66)
+    target_alias = models.CharField(max_length=64, default='')
+    target_fee = models.IntegerField(default=0)
+    target_max_cost = models.IntegerField(default=0)
+    trigger_chan_id = models.CharField(max_length=20, default='')
+    other_pubkey = models.CharField(max_length=66, default='')
+    other_alias = models.CharField(max_length=64, default='')
+    other_fee_ppm = models.IntegerField(null=True)
+    budget_ppm = models.IntegerField(default=0)
+    sources_tried = models.IntegerField(default=0)
+    routes_new = models.IntegerField(default=0)
+    routes_existing = models.IntegerField(default=0)
+    errors = models.IntegerField(default=0)
+    routes_via_new_peer = models.IntegerField(default=0)
+    rebalance_scheduled = models.BooleanField(default=False)
+    details = models.TextField(default='')
+
+    class Meta:
+        app_label = 'gui'
+        ordering = ['-timestamp']

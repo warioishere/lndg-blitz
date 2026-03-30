@@ -6,6 +6,7 @@
   <div class="w3-bar w3-border-bottom w3-margin-bottom">
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Overview')">Overview</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Events')">Events</button>
+    <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'ProbeLog')">Probe Log</button>
     <button class="w3-bar-item w3-button tablink" onclick="openTab(event,'Settings')">Settings</button>
   </div>
 
@@ -76,6 +77,33 @@
     </table>
   </div>
 
+  <!-- Probe Log Tab -->
+  <div id="ProbeLog" class="tabcontent" style="display:none">
+    <table class="w3-table-all w3-centered w3-hoverable w3-small">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Target</th>
+          <th>Target Fee</th>
+          <th>Trigger</th>
+          <th>New Peer</th>
+          <th>Peer Fee</th>
+          <th>Budget</th>
+          <th>Sources</th>
+          <th>New Routes</th>
+          <th>Existing</th>
+          <th>Via New Peer</th>
+          <th>Rebalance</th>
+        </tr>
+      </thead>
+      <tbody id="probeLogTable"></tbody>
+    </table>
+    <div id="probeLogDetail" class="w3-panel w3-pale-blue w3-padding w3-margin-top" style="display:none">
+      <h5>Route Details</h5>
+      <pre id="probeLogDetailText" style="white-space:pre-wrap;font-size:12px"></pre>
+    </div>
+  </div>
+
   <!-- Settings Tab -->
   <div id="Settings" class="tabcontent" style="display:none">
     <div class="w3-row-padding">
@@ -126,7 +154,7 @@ function openTab(evt, name) {
 }
 
 function restoreTab() {
-  const valid = ['Overview', 'Events', 'Settings'];
+  const valid = ['Overview', 'Events', 'ProbeLog', 'Settings'];
   const saved = localStorage.getItem('gw-tab');
   const tab = valid.includes(saved) ? saved : 'Overview';
   document.querySelectorAll('.tabcontent').forEach(el => el.style.display = 'none');
@@ -315,13 +343,75 @@ async function loadSettings() {
   byId('gw-cooldown').innerText = cooldown + 's';
 }
 
+async function loadProbeLogs() {
+  const res = await GET('probelogs', {data:{}});
+  const logs = Array.isArray(res) ? res : (res.results || []);
+  const table = byId('probeLogTable');
+  table.innerHTML = '';
+  logs.forEach(log => {
+    const row = table.insertRow();
+    if (log.routes_via_new_peer > 0) row.className = 'w3-pale-green';
+    else if (log.routes_new === 0 && log.routes_existing === 0) row.className = 'w3-pale-red';
+    row.insertCell().innerText = formatDate(log.timestamp);
+    // Target
+    const tCell = row.insertCell();
+    const tLink = document.createElement('a');
+    tLink.href = GRAPH_LINKS + '/' + NETWORK + 'node/' + log.target_pubkey;
+    tLink.target = '_blank';
+    tLink.innerText = log.target_alias || log.target_pubkey.substring(0, 16);
+    tCell.appendChild(tLink);
+    row.insertCell().innerText = log.target_fee + ' ppm';
+    row.insertCell().innerText = log.trigger_chan_id || '---';
+    // New peer
+    const pCell = row.insertCell();
+    if (log.other_pubkey) {
+      const pLink = document.createElement('a');
+      pLink.href = GRAPH_LINKS + '/' + NETWORK + 'node/' + log.other_pubkey;
+      pLink.target = '_blank';
+      pLink.innerText = log.other_alias || log.other_pubkey.substring(0, 16);
+      pCell.appendChild(pLink);
+    } else {
+      pCell.innerText = '---';
+    }
+    row.insertCell().innerText = log.other_fee_ppm != null ? log.other_fee_ppm + ' ppm' : '---';
+    row.insertCell().innerText = log.budget_ppm + ' ppm';
+    row.insertCell().innerText = log.sources_tried;
+    // Routes
+    const newCell = row.insertCell();
+    newCell.innerText = log.routes_new;
+    if (log.routes_new > 0) newCell.className = 'w3-text-green';
+    row.insertCell().innerText = log.routes_existing;
+    // Via new peer
+    const viaCell = row.insertCell();
+    viaCell.innerText = log.routes_via_new_peer;
+    if (log.routes_via_new_peer > 0) viaCell.className = 'w3-text-green w3-bold';
+    // Rebalance scheduled
+    const rebCell = row.insertCell();
+    if (log.rebalance_scheduled) {
+      rebCell.innerHTML = '<span class="w3-tag w3-green w3-tiny">Yes</span>';
+    } else {
+      rebCell.innerText = '---';
+    }
+    // Click to show details
+    if (log.details) {
+      row.style.cursor = 'pointer';
+      row.onclick = () => {
+        const detail = byId('probeLogDetail');
+        byId('probeLogDetailText').innerText = log.details;
+        detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+      };
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   restoreTab();
   loadEvents();
+  loadProbeLogs();
   loadWatchedTargets();
   loadSettings();
-  // Auto-refresh events every 30 seconds
   setInterval(loadEvents, 30000);
+  setInterval(loadProbeLogs, 30000);
 });
 </script>
 {% endblock %}
