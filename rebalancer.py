@@ -927,7 +927,9 @@ async def run_rebalancer(rebalance, worker):
                 next_rebalance = None
             return next_rebalance
     except Exception as e:
+        import traceback
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error running rebalance attempt: {str(e)}")
+        traceback.print_exc()
 
 @sync_to_async
 def estimate_liquidity( payment ):
