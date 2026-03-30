@@ -23,7 +23,6 @@ router.register(r'feelog', views.FeeLogViewSet)
 router.register(r'inboundfeelog', views.InboundFeeLogViewSet)
 router.register(r'rebalanceroutes', views.RebalanceRouteViewSet)
 router.register(r'nodereputation', views.NodeReputationViewSet)
-router.register(r'probelogs', views.ProbeLogViewSet)
 router.register(r'graphevents', views.GraphEventViewSet)
 router.register(r'probelogs', views.ProbeLogViewSet)
 
