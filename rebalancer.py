@@ -587,8 +587,11 @@ async def run_rebalancer(rebalance, worker):
             chan_ids = sort_channels_by_htlc(stub, chan_ids)
 
             # Load opportunity cost data for this rebalance
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : DEBUG loading opportunity cost data for {rebalance.target_alias}")
             source_fee_map = await get_source_fee_map(chan_ids)
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : DEBUG source_fee_map loaded: {len(source_fee_map)} entries")
             target_fee_rate, ar_max_cost = await get_target_info(rebalance.last_hop_pubkey)
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : DEBUG target_info: fee={target_fee_rate} max_cost={ar_max_cost}")
             max_fee_rate = get_local_setting('AR-MaxFeeRate', 500, int)
             opp_cost_enabled = target_fee_rate is not None and ar_max_cost is not None
 
