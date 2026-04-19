@@ -50,6 +50,7 @@ class AutoRebalanceForm(forms.Form):
     autopilot = forms.IntegerField(label='autopilot', required=False)
     autopilotdays = forms.IntegerField(label='autopilotdays', required=False)
     workers = forms.IntegerField(label='workers', required=False)
+    per_source_enabled = forms.IntegerField(label='per_source_enabled', required=False)
     update_channels = forms.BooleanField(widget=forms.CheckboxSelectMultiple, required=False)
 
 class AutoFeesForm(AutoRebalanceForm):
