@@ -1,5 +1,5 @@
 import django, json, secrets, asyncio, os
-from time import sleep
+from time import sleep, monotonic
 from asgiref.sync import sync_to_async
 from django.db.models import Sum, F, Q, Case, When, Value, IntegerField
 from datetime import datetime, timedelta
@@ -32,6 +32,54 @@ from gui.models import (
     calc_weighted_ratio,
 )
 from utils import get_local_setting
+
+# Per-source rebalance coordination (shared across workers)
+# Failure cache: (source_chan_id_str, target_pubkey) -> monotonic expiration
+# Prevents retrying a pair that recently failed
+_failed_pairs = {}
+_FAILED_PAIR_EXPIRY = 300  # 5 minutes (regolancer default)
+
+# Active sources: chan_id_str currently locked by a worker
+# Prevents two workers from using the same source channel simultaneously
+_active_sources = set()
+_sources_lock = asyncio.Lock()
+
+
+def _prune_failed_pairs():
+    """Remove expired entries from the failure cache."""
+    now = monotonic()
+    expired = [k for k, exp in _failed_pairs.items() if exp < now]
+    for k in expired:
+        _failed_pairs.pop(k, None)
+
+
+def _is_pair_failed(source_chan_id, target_pubkey):
+    """Check if (source, target) pair is currently in the failure cache."""
+    _prune_failed_pairs()
+    key = (str(source_chan_id), target_pubkey)
+    return key in _failed_pairs
+
+
+def _mark_pair_failed(source_chan_id, target_pubkey):
+    """Add (source, target) to failure cache for 5 minutes."""
+    key = (str(source_chan_id), target_pubkey)
+    _failed_pairs[key] = monotonic() + _FAILED_PAIR_EXPIRY
+
+
+async def _try_acquire_source(source_chan_id):
+    """Try to acquire exclusive lock on a source channel. Returns True if acquired."""
+    async with _sources_lock:
+        if str(source_chan_id) in _active_sources:
+            return False
+        _active_sources.add(str(source_chan_id))
+        return True
+
+
+async def _release_source(source_chan_id):
+    """Release lock on a source channel."""
+    async with _sources_lock:
+        _active_sources.discard(str(source_chan_id))
+
 
 # map standard failure codes and internal details to enum names for clearer logs
 FAILURE_CODE_NAMES = {
@@ -130,6 +178,197 @@ async def probe_route_amount(routerstub, hop_keys, outgoing_chan_id, cltv_delta,
             break
     return good if good >= MIN_PROBE_AMOUNT else 0
 
+
+async def try_single_source(
+    stub, routerstub, rebalance, source_chan_id, source_fee_map,
+    target_fee_rate, ar_max_cost, max_fee_rate, invoice_response,
+    fee_limit_msat, timeout,
+):
+    """Attempt a rebalance via a single outbound source channel.
+
+    Uses QueryRoutes (fee_limit = target*max_cost% - source_fee) → BuildRoute →
+    opportunity-cost check → SendToRouteV2. Returns a dict on success:
+        {'status': 2, 'fees_paid': sats, 'successful_out': chan_id,
+         'successful_in': chan_id, 'payment_hash': hex, 'value': sats}
+    Returns None on any failure (caller should try next source).
+    """
+    src_fee = source_fee_map.get(str(source_chan_id), source_fee_map.get(source_chan_id, 0))
+    # Per-source budget: how many ppm of route fee we can afford
+    per_source_route_ppm = int(target_fee_rate * (ar_max_cost / 100)) - src_fee
+    per_source_route_ppm = min(per_source_route_ppm, max_fee_rate)
+    if per_source_route_ppm <= 0:
+        return None
+    per_source_fee_limit_sat = int(per_source_route_ppm * rebalance.value / 1_000_000)
+    if per_source_fee_limit_sat <= 0:
+        return None
+
+    # QueryRoutes: LND finds the cheapest route from us through this source to target
+    # (respects inbound fee discounts natively via UseMissionControl)
+    try:
+        qr_response = await sync_to_async(stub.QueryRoutes)(
+            ln.QueryRoutesRequest(
+                pub_key=rebalance.last_hop_pubkey,
+                amt=rebalance.value,
+                outgoing_chan_id=int(source_chan_id),
+                fee_limit=ln.FeeLimit(fixed=per_source_fee_limit_sat),
+                use_mission_control=True,
+            )
+        )
+    except Exception as e:
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : QueryRoutes via {source_chan_id} failed: {e}")
+        return None
+
+    if not qr_response or not qr_response.routes:
+        return None
+
+    for query_route in qr_response.routes:
+        if not query_route.hops:
+            continue
+        # Extract hop pubkeys for BuildRoute
+        hop_keys = [bytes.fromhex(h.pub_key) for h in query_route.hops]
+        if len(query_route.hops) >= 2:
+            cltv_delta = query_route.hops[-1].expiry - query_route.hops[-2].expiry
+        else:
+            cltv_delta = 144
+
+        # BuildRoute with payment_addr so we can actually send via this route
+        try:
+            build = await routerstub.BuildRoute(
+                lnr.BuildRouteRequest(
+                    outgoing_chan_id=int(source_chan_id),
+                    amt_msat=rebalance.value * 1000,
+                    hop_pubkeys=hop_keys,
+                    final_cltv_delta=cltv_delta,
+                    payment_addr=invoice_response.payment_addr,
+                )
+            )
+        except Exception as e:
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {source_chan_id} failed: {e}")
+            continue
+
+        # Opportunity-cost check (uses total_fees_msat which already includes inbound discounts)
+        allowed, route_fee_ppm, max_route_ppm = check_opportunity_cost(
+            build.route.total_fees_msat, rebalance.value,
+            source_chan_id, source_fee_map,
+            target_fee_rate, ar_max_cost, max_fee_rate,
+        )
+        if not allowed:
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} rejected: route {route_fee_ppm} ppm > max {max_route_ppm} ppm (target {target_fee_rate}*{ar_max_cost}% - src {src_fee})")
+            continue
+
+        # Global fee_limit check (safety, in case the per-source budget is looser than rebalance.fee_limit)
+        if build.route.total_fees_msat > fee_limit_msat:
+            actual_ppm = int((build.route.total_fees_msat / (rebalance.value * 1000)) * 1000000)
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} exceeds rebalance fee_limit ({actual_ppm} ppm > {int(fee_limit_msat/rebalance.value*1000)} ppm)")
+            continue
+
+        route_msg = build.route
+        rebuilt_hex = route_msg.SerializeToString().hex()
+
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Sending via {source_chan_id}: {len(route_msg.hops)} hops, {route_fee_ppm} ppm route + {src_fee} ppm source")
+
+        try:
+            send_response = await routerstub.SendToRouteV2(
+                lnr.SendToRouteRequest(
+                    payment_hash=invoice_response.r_hash,
+                    route=route_msg,
+                ),
+                timeout=timeout,
+            )
+        except Exception as e:
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : SendToRouteV2 via {source_chan_id} error: {e}")
+            return None
+
+        # HTLCStatus: 1 = SUCCEEDED
+        if send_response.status == 1:
+            fees_msat = getattr(send_response, "fee_msat", None)
+            if not fees_msat:
+                try:
+                    fees_msat = send_response.route.total_fees_msat
+                except Exception:
+                    fees_msat = 0
+            await update_route(rebalance.last_hop_pubkey, source_chan_id, rebuilt_hex, True)
+            await update_node_reputations(rebuilt_hex, True)
+            return {
+                'status': 2,
+                'fees_paid': fees_msat / 1000 if fees_msat else 0,
+                'successful_out': send_response.route.hops[0].chan_id,
+                'successful_in': send_response.route.hops[-1].chan_id,
+                'payment_hash': invoice_response.r_hash.hex(),
+                'value': rebalance.value,
+            }
+
+        # Failure handling
+        failure = getattr(send_response, "failure", None)
+        code_num = getattr(failure, "code", None) if failure else None
+        fsi = getattr(failure, "failure_source_index", None) if failure else None
+        reason = FAILURE_CODE_NAMES.get(code_num, code_num)
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} failed: code={reason} hop={fsi}")
+        await update_route(rebalance.last_hop_pubkey, source_chan_id, rebuilt_hex, False)
+        await update_node_reputations(rebuilt_hex, False, fsi)
+
+        # TEMPORARY_CHANNEL_FAILURE at target's channel → try smaller amount via probe
+        total_hops = len(route_msg.hops)
+        if failure and code_num == 15 and fsi is not None and fsi == total_hops - 2:
+            probed = await probe_route_amount(
+                routerstub, hop_keys, source_chan_id, cltv_delta, rebalance.value,
+            )
+            if probed > 0:
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe found max {probed} sats via {source_chan_id}")
+                probe_invoice = stub.AddInvoice(ln.Invoice(value=probed, expiry=timeout))
+                try:
+                    probe_build = await routerstub.BuildRoute(
+                        lnr.BuildRouteRequest(
+                            outgoing_chan_id=int(source_chan_id),
+                            amt_msat=probed * 1000,
+                            hop_pubkeys=hop_keys,
+                            final_cltv_delta=cltv_delta,
+                            payment_addr=probe_invoice.payment_addr,
+                        )
+                    )
+                except Exception:
+                    continue
+                # Opp-cost check for probed amount
+                p_allowed, p_ppm, p_max = check_opportunity_cost(
+                    probe_build.route.total_fees_msat, probed,
+                    source_chan_id, source_fee_map,
+                    target_fee_rate, ar_max_cost, max_fee_rate,
+                )
+                if not p_allowed:
+                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probed route via {source_chan_id} rejected: {p_ppm} ppm > {p_max} ppm")
+                    continue
+                try:
+                    probe_response = await routerstub.SendToRouteV2(
+                        lnr.SendToRouteRequest(
+                            payment_hash=probe_invoice.r_hash,
+                            route=probe_build.route,
+                        ),
+                        timeout=timeout,
+                    )
+                except Exception:
+                    continue
+                if probe_response.status == 1:
+                    fees_msat = probe_response.route.total_fees_msat or 0
+                    probe_hex = probe_build.route.SerializeToString().hex()
+                    await update_route(rebalance.last_hop_pubkey, source_chan_id, probe_hex, True, forgive_failure=True)
+                    await update_node_reputations(probe_hex, True)
+                    # Scale fee_limit so RapidFire children keep same ppm
+                    scaled_fee_limit = round(rebalance.fee_limit * (probed / rebalance.value), 3)
+                    return {
+                        'status': 2,
+                        'fees_paid': fees_msat / 1000 if fees_msat else 0,
+                        'successful_out': probe_response.route.hops[0].chan_id,
+                        'successful_in': probe_response.route.hops[-1].chan_id,
+                        'payment_hash': probe_invoice.r_hash.hex(),
+                        'value': probed,
+                        'scaled_fee_limit': scaled_fee_limit,
+                    }
+        # Route failed, caller should try next source
+        return None
+
+    return None
+
+
 @sync_to_async
 def get_out_cans(rebalance, auto_rebalance_channels):
     try:
@@ -171,6 +410,18 @@ def inbound_cans_len(inbound_cans):
 @sync_to_async
 def get_max_fee_rate():
     return get_local_setting('AR-MaxFeeRate', 500, int)
+
+@sync_to_async
+def get_per_source_enabled():
+    """Feature flag: when 1, use per-source iteration instead of SendPaymentV2 fallback."""
+    return get_local_setting('AR-PerSourceEnabled', 0, int) == 1
+
+@sync_to_async
+def get_allowed_sources_for_target(target_pubkey):
+    """Return set of chan_ids if AllowedTargets are configured for this target, else None."""
+    entries = AllowedTarget.objects.filter(target_pubkey=target_pubkey).select_related('source_chan')
+    ids = {e.source_chan.chan_id for e in entries}
+    return ids if ids else None
 
 @sync_to_async
 def get_source_fee_map(chan_ids):
@@ -641,7 +892,9 @@ async def run_rebalancer(rebalance, worker):
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved routes disabled")
             fee_limit_msat = int(rebalance.fee_limit * 1000)
             payment_response = None
+            tried_saved_sources = set()  # chan_ids already attempted via saved routes
             for sr in saved_routes:
+                tried_saved_sources.add(str(sr.outgoing_chan_id))
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Trying saved route via {sr.outgoing_chan_id}")
                 rebuilt_hex = None
                 try:
@@ -824,7 +1077,69 @@ async def run_rebalancer(rebalance, worker):
                         await mark_route_failure(sr)
                     payment_response = None
 
-            if payment_response is None or payment_response.status != 1:
+            per_source_enabled = opp_cost_enabled and not rebalance.manual and await get_per_source_enabled()
+
+            if per_source_enabled and (payment_response is None or payment_response.status != 1):
+                # Per-source iteration (regolancer-style): each source gets its own fee_limit accounting
+                # for opportunity cost. No SendPaymentV2 fallback when this path runs.
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Per-source iteration enabled, target budget {int(target_fee_rate * ar_max_cost / 100)} ppm")
+                allowed_sources = await get_allowed_sources_for_target(rebalance.last_hop_pubkey)
+
+                # Sort sources by outbound fee ascending (cheapest first)
+                ordered_sources = sorted(
+                    chan_ids,
+                    key=lambda c: source_fee_map.get(str(c), source_fee_map.get(c, 0))
+                )
+                # Skip sources already tried as saved routes
+                ordered_sources = [c for c in ordered_sources if str(c) not in tried_saved_sources]
+                # Restrict to allowed targets if configured
+                if allowed_sources is not None:
+                    ordered_sources = [c for c in ordered_sources if str(c) in {str(x) for x in allowed_sources}]
+
+                for source_chan in ordered_sources:
+                    # Skip pairs that recently failed
+                    if _is_pair_failed(source_chan, rebalance.last_hop_pubkey):
+                        continue
+                    # Try to acquire source lock (prevent worker races)
+                    if not await _try_acquire_source(source_chan):
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Source {source_chan} locked by another worker, skipping")
+                        continue
+                    try:
+                        # Fresh invoice per attempt (invoices are one-shot)
+                        per_attempt_invoice = stub.AddInvoice(ln.Invoice(value=rebalance.value, expiry=timeout))
+                        result = await try_single_source(
+                            stub, routerstub, rebalance, source_chan, source_fee_map,
+                            target_fee_rate, ar_max_cost, max_fee_rate,
+                            per_attempt_invoice, fee_limit_msat, timeout,
+                        )
+                    finally:
+                        await _release_source(source_chan)
+
+                    if result is not None:
+                        # Success via this source
+                        rebalance.status = 2
+                        rebalance.fees_paid = result['fees_paid']
+                        rebalance.payment_hash = result['payment_hash']
+                        if 'scaled_fee_limit' in result:
+                            rebalance.fee_limit = result['scaled_fee_limit']
+                        if result['value'] != rebalance.value:
+                            rebalance.value = result['value']
+                        successful_out = result['successful_out']
+                        successful_in = result['successful_in']
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Per-source succeeded via {source_chan} - hash: {rebalance.payment_hash}")
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Used outgoing chan_id: {successful_out}, incoming chan_id: {successful_in}")
+                        payment_response = None  # signal success to RapidFire via rebalance.status=2
+                        break
+                    else:
+                        # Cache (source, target) failure to avoid retry for 5 min
+                        _mark_pair_failed(source_chan, rebalance.last_hop_pubkey)
+
+                if rebalance.status != 2:
+                    # No source succeeded
+                    if rebalance.status == 0:
+                        rebalance.status = 4  # FAILURE_REASON_NO_ROUTE
+                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Per-source iteration: no route succeeded for {rebalance.target_alias}")
+            elif payment_response is None or payment_response.status != 1:
                     if saved_routes:
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Falling back to automatic routing")
                     print(f"{datetime.now().strftime('%c')} : [Rebalancer] : SendPaymentV2: Sending to LND with outgoing_chan_ids={chan_ids}")
