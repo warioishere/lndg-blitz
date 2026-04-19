@@ -13,7 +13,7 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated
 from .forms import *
 from .serializers import *
-from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, NodeReputation, ProbeLog, GraphEvent, calc_success_ratio, calc_weighted_ratio
+from .models import Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, LocalSettings, Peers, Onchain, Closures, Resolutions, PendingHTLCs, FailedHTLCs, Autopilot, Autofees, InboundFeeLog, PendingChannels, AvoidNodes, PeerEvents, HistFailedHTLC, TradeSales, RebalanceRoute, AllowedTarget, AmbossPeerFees, NodeReputation, ProbeLog, GraphProbeLog, GraphEvent, calc_success_ratio, calc_weighted_ratio
 from gui.node_cache import get_node_info_cached, cache_stats
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
@@ -3621,10 +3621,10 @@ class GraphEventViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = {'target_pubkey': ['exact'], 'event_type': ['exact']}
     pagination_class = None
 
-class ProbeLogViewSet(viewsets.ReadOnlyModelViewSet):
+class GraphProbeLogViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAuthenticated] if settings.LOGIN_REQUIRED else []
-    queryset = ProbeLog.objects.all()
-    serializer_class = ProbeLogSerializer
+    queryset = GraphProbeLog.objects.all()
+    serializer_class = GraphProbeLogSerializer
     pagination_class = None
 
 class FailedHTLCFilter(FilterSet):

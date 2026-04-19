@@ -616,7 +616,7 @@ class GraphEvent(models.Model):
             models.Index(fields=['target_pubkey'], name='graphevent_target_idx'),
         ]
 
-class ProbeLog(models.Model):
+class GraphProbeLog(models.Model):
     timestamp = models.DateTimeField(default=timezone.now)
     target_pubkey = models.CharField(max_length=66)
     target_alias = models.CharField(max_length=64, default='')

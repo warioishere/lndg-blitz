@@ -9,7 +9,7 @@ django.setup()
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
 from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
-from gui.models import Channels, LocalSettings, Peers, GraphEvent, Rebalancer, ProbeLog
+from gui.models import Channels, LocalSettings, Peers, GraphEvent, Rebalancer, GraphProbeLog
 from gui.node_cache import get_node_info_cached
 from jobs import probe_targets
 
@@ -117,7 +117,7 @@ def _trigger_probe(stub, target_pubkey, other_pubkey=None, other_fee_ppm=None, c
         print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   no routes found, skipping rebalance")
 
     # Save probe log to DB
-    ProbeLog.objects.create(
+    GraphProbeLog.objects.create(
         target_pubkey=target_pubkey,
         target_alias=ch.alias,
         target_fee=ch.local_fee_rate,

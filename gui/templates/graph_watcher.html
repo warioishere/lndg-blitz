@@ -344,7 +344,7 @@ async function loadSettings() {
 }
 
 async function loadProbeLogs() {
-  const res = await GET('probelogs', {data:{}});
+  const res = await GET('graphprobelogs', {data:{}});
   const logs = Array.isArray(res) ? res : (res.results || []);
   const table = byId('probeLogTable');
   table.innerHTML = '';

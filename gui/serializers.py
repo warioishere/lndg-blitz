@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from rest_framework.relations import PrimaryKeyRelatedField
-from .models import LocalSettings, Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, Peers, Onchain, PendingHTLCs, FailedHTLCs, Closures, Resolutions, PeerEvents, TradeSales, Autofees, InboundFeeLog, RebalanceRoute, NodeReputation, ProbeLog, GraphEvent
+from .models import LocalSettings, Payments, PaymentHops, Invoices, Forwards, Channels, Rebalancer, Peers, Onchain, PendingHTLCs, FailedHTLCs, Closures, Resolutions, PeerEvents, TradeSales, Autofees, InboundFeeLog, RebalanceRoute, NodeReputation, ProbeLog, GraphProbeLog, GraphEvent
 
 ##FUTURE UPDATE 'exclude' TO 'fields'
 
@@ -270,10 +270,10 @@ class GraphEventSerializer(serializers.HyperlinkedModelSerializer):
         model = GraphEvent
         exclude = []
 
-class ProbeLogSerializer(serializers.HyperlinkedModelSerializer):
+class GraphProbeLogSerializer(serializers.HyperlinkedModelSerializer):
     id = serializers.ReadOnlyField()
     class Meta:
-        model = ProbeLog
+        model = GraphProbeLog
         exclude = []
 
 class ResetSerializer(serializers.Serializer):
