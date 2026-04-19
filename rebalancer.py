@@ -1105,12 +1105,12 @@ async def run_rebalancer(rebalance, worker):
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Source {source_chan} locked by another worker, skipping")
                         continue
                     try:
-                        # Fresh invoice per attempt (invoices are one-shot)
-                        per_attempt_invoice = stub.AddInvoice(ln.Invoice(value=rebalance.value, expiry=timeout))
+                        # Reuse the invoice created earlier (failed SendToRouteV2 attempts
+                        # don't settle the invoice, same pattern as saved routes)
                         result = await try_single_source(
                             stub, routerstub, rebalance, source_chan, source_fee_map,
                             target_fee_rate, ar_max_cost, max_fee_rate,
-                            per_attempt_invoice, fee_limit_msat, timeout,
+                            invoice_response, fee_limit_msat, timeout,
                         )
                     finally:
                         await _release_source(source_chan)

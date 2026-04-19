@@ -2641,6 +2641,7 @@ def get_local_settings(*prefixes):
         form.append({'unit': '', 'form_id': 'autopilot', 'value': 0, 'label': 'Autopilot', 'id': 'AR-Autopilot', 'title': 'This enables or disables the Auto-Rebalance function for individual channels based on flow (automatically acts upon suggestions on this page: /actions)', 'min':0, 'max':1})
         form.append({'unit': 'days', 'form_id': 'autopilotdays', 'value': 7, 'label': 'Autopilot Days', 'id': 'AR-APDays', 'title': 'Number of days to consider for autopilot calculations. Default 7', 'min':0, 'max':100})
         form.append({'unit': '', 'form_id': 'workers', 'value': 1, 'label': 'Workers', 'id': 'AR-Workers', 'title': 'Number of concurrent rebalance workers to run at once (use a proper value for your hardware, this will increase the load on the lnd server). Default 1', 'min':1, 'max':12})
+        form.append({'unit': '', 'form_id': 'per_source_enabled', 'value': 0, 'label': 'Per-Source Mode', 'id': 'AR-PerSourceEnabled', 'title': 'When enabled, iterate outgoing channels individually with per-source fee budget accounting for opportunity cost (route_fee + source_fee ≤ target_fee * max_cost%). Regolancer-style. Off = legacy SendPaymentV2 with global fee_limit.', 'min':0, 'max':1})
     if 'AF-' in prefixes:
         form.append({'unit': '', 'form_id': 'af_enabled', 'value': 0, 'label': 'Autofee', 'id': 'AF-Enabled', 'title': 'Enable/Disable All Auto-fee functionality', 'min':0, 'max':1})
         form.append({'unit': '', 'form_id': 'af_inbound', 'value': 0, 'label': 'Inbound Fees', 'id': 'AF-InboundFees', 'title': 'Enable/Disable Inbound Auto-fee functionality', 'min':0, 'max':1})
@@ -2732,6 +2733,7 @@ def update_settings(request):
                     {'form_id': 'autopilot', 'value': 0, 'parse': lambda x: int(x),'id': 'AR-Autopilot'},
                     {'form_id': 'autopilotdays', 'value': 7, 'parse': lambda x: int(x),'id': 'AR-APDays'},
                     {'form_id': 'workers', 'value': 1, 'parse': lambda x: int(x),'id': 'AR-Workers'},
+                    {'form_id': 'per_source_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'AR-PerSourceEnabled'},
                     #AF
                     {'form_id': 'af_enabled', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-Enabled'},
                     {'form_id': 'af_inbound', 'value': 0, 'parse': lambda x: int(x),'id': 'AF-InboundFees'},
