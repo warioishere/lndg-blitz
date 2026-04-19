@@ -457,27 +457,34 @@ def advanced_rebalancing(request):
 def logs(request):
     if request.method == 'GET':
         try:
-            count = request.GET.get('tail', 20)
+            count = int(request.GET.get('tail', 200))
             grep = request.GET.get('grep', None)
+            fmt = request.GET.get('format', None)
             logfile = '/var/log/lndg-controller.log'
-            file_size = path.getsize(logfile)-2
+            file_size = path.getsize(logfile)
             if file_size == 0:
-                logs = ['Logs are empty....']
+                logs_list = ['Logs are empty....']
             else:
-                target_size = 128*int(count)
+                # Read roughly count*200 bytes from the end, then keep last N matching lines
+                target_size = 200 * count
                 read_size = min(target_size, file_size)
                 with open(logfile, "rb") as reader:
                     reader.seek(-read_size, 2)
-                    logs = []
+                    logs_list = []
                     for line in reader.readlines():
-                        log_line = line.decode('utf-8')
+                        log_line = line.decode('utf-8', errors='replace')
                         if grep:
                             if str(grep) in log_line:
-                                logs.append(log_line)
+                                logs_list.append(log_line)
                         else:
-                            logs.append(log_line)
-            return render(request, 'logs.html', {'logs': logs})
+                            logs_list.append(log_line)
+                    logs_list = logs_list[-count:]
+            if fmt == 'json':
+                return JsonResponse({'size': file_size, 'lines': logs_list})
+            return render(request, 'logs.html', {'logs': logs_list, 'tail': count, 'grep': grep or ''})
         except Exception as e:
+            if request.GET.get('format') == 'json':
+                return JsonResponse({'error': str(e)}, status=500)
             return render(request, 'error.html', {'error': str(e)})
     return redirect('home')
 

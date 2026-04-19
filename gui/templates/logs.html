@@ -2,9 +2,120 @@
 {% block title %} {{ block.super }} - Logs{% endblock %}
 {% block content %}
 <div class="w3-container w3-padding-small">
-  <h2>Logs</h2>
-  <div class="w3-container w3-padding-small">
-    <pre class="w3-container w3-border" style="white-space: pre-wrap">{% for line in logs %}{{line}}{%endfor%}</pre>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+    <h2 style="margin:0">Logs</h2>
+    <label><input type="checkbox" id="autoFollow" checked> Auto-follow</label>
+    <label>Refresh every
+      <select id="interval" class="w3-select w3-border" style="width:auto;display:inline-block;padding:2px 4px">
+        <option value="1000">1s</option>
+        <option value="2000" selected>2s</option>
+        <option value="5000">5s</option>
+        <option value="10000">10s</option>
+      </select>
+    </label>
+    <label>Lines
+      <input type="number" id="tail" min="20" max="5000" value="{{ tail|default:200 }}" style="width:80px">
+    </label>
+    <label>Filter <input type="text" id="grep" value="{{ grep }}" placeholder="substring match" style="width:200px"></label>
+    <button id="pauseBtn" class="w3-button w3-small w3-border" type="button">Pause</button>
+    <button id="clearBtn" class="w3-button w3-small w3-border" type="button">Clear view</button>
+    <span id="status" class="w3-tag w3-green w3-small">live</span>
+  </div>
+  <div class="w3-container w3-border" style="background:#111;color:#ddd;padding:8px;height:calc(100vh - 180px);overflow:auto;font-family:monospace;font-size:12px" id="logBox">
+    <pre id="logPre" style="margin:0;white-space:pre-wrap;word-break:break-all">{% for line in logs %}{{line}}{%endfor%}</pre>
   </div>
 </div>
+<script>
+(function() {
+  const box = document.getElementById('logBox');
+  const pre = document.getElementById('logPre');
+  const autoFollow = document.getElementById('autoFollow');
+  const interval = document.getElementById('interval');
+  const tail = document.getElementById('tail');
+  const grep = document.getElementById('grep');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const statusTag = document.getElementById('status');
+
+  let timer = null;
+  let paused = false;
+  let lastSize = 0;
+
+  // Token highlighting for readability
+  const rejectRe = /rejected|Error|Failed|FAILURE|TEMPORARY_CHANNEL/g;
+  const successRe = /succeeded|SUCCEEDED|completed/g;
+  const perSourceRe = /Per-source|Sending via|via new peer/g;
+
+  function highlight(text) {
+    // Escape HTML first
+    text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    text = text.replace(rejectRe, '<span style="color:#ff8080">$&</span>');
+    text = text.replace(successRe, '<span style="color:#8fdc8f">$&</span>');
+    text = text.replace(perSourceRe, '<span style="color:#80c8ff">$&</span>');
+    return text;
+  }
+
+  async function fetchLogs() {
+    if (paused) return;
+    try {
+      const params = new URLSearchParams({
+        tail: tail.value || 200,
+        format: 'json',
+      });
+      if (grep.value) params.set('grep', grep.value);
+      const res = await fetch('/logs?' + params.toString());
+      if (!res.ok) {
+        statusTag.textContent = 'err ' + res.status;
+        statusTag.className = 'w3-tag w3-red w3-small';
+        return;
+      }
+      const data = await res.json();
+      if (data.error) {
+        statusTag.textContent = 'err';
+        statusTag.className = 'w3-tag w3-red w3-small';
+        return;
+      }
+      const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+      pre.innerHTML = data.lines.map(highlight).join('');
+      lastSize = data.size;
+      if (autoFollow.checked && atBottom) {
+        box.scrollTop = box.scrollHeight;
+      }
+      statusTag.textContent = 'live';
+      statusTag.className = 'w3-tag w3-green w3-small';
+    } catch (e) {
+      statusTag.textContent = 'offline';
+      statusTag.className = 'w3-tag w3-red w3-small';
+    }
+  }
+
+  function restartTimer() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(fetchLogs, parseInt(interval.value, 10));
+  }
+
+  interval.addEventListener('change', restartTimer);
+  tail.addEventListener('change', fetchLogs);
+  grep.addEventListener('input', () => {
+    clearTimeout(grep._t);
+    grep._t = setTimeout(fetchLogs, 400);
+  });
+  pauseBtn.addEventListener('click', () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    statusTag.textContent = paused ? 'paused' : 'live';
+    statusTag.className = 'w3-tag w3-small ' + (paused ? 'w3-orange' : 'w3-green');
+  });
+  clearBtn.addEventListener('click', () => { pre.innerHTML = ''; });
+
+  // Initial render: highlight the server-rendered content
+  if (pre.textContent.trim()) {
+    const initial = pre.textContent;
+    pre.innerHTML = highlight(initial);
+  }
+  box.scrollTop = box.scrollHeight;
+  restartTimer();
+  fetchLogs();
+})();
+</script>
 {% endblock %}
