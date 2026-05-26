@@ -122,8 +122,10 @@ def update_payment(stub, payment, self_pubkey):
                         alias = ''
                     fee = hop.fee_msat/1000
                     if hop_count == total_hops:
-                        # Add additional HTLC information in last hop alias
-                        alias += f'[ {payment.status}-{attempt.status}-{attempt.failure.code}-{attempt.failure.failure_source_index} ]'
+                        # Add additional HTLC information in last hop alias, keeping the
+                        # combined string within the alias column limit (varchar(32))
+                        htlc_info = f'[ {payment.status}-{attempt.status}-{attempt.failure.code}-{attempt.failure.failure_source_index} ]'
+                        alias = (alias[:32 - len(htlc_info)] + htlc_info) if len(htlc_info) <= 32 else htlc_info[:32]
                     if attempt.status == 1 or attempt.status == 0 or (attempt.status == 2 and attempt.failure.code in (1,2,12)):
                         PaymentHops(payment_hash=db_payment, attempt_id=attempt.attempt_id, step=hop_count, chan_id=hop.chan_id, alias=alias, chan_capacity=hop.chan_capacity, node_pubkey=hop.pub_key, amt=round(hop.amt_to_forward_msat/1000, 3), fee=round(fee, 3), cost_to=round(cost_to, 3)).save()
                     cost_to += fee
