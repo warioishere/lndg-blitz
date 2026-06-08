@@ -729,14 +729,6 @@ def purge_stale_routes():
         ).exclude(
             success_count=0, failure_count=0
         ).delete()
-        # Drop chronic failures even when last_success is recent:
-        # never succeeded with >=10 failures, or extremely poor ratio.
-        chronic = RebalanceRoute.objects.filter(
-            Q(failure_count__gte=10, success_count=0) |
-            Q(failure_count__gte=50, failure_count__gt=F('success_count') * 10)
-        ).delete()
-        if chronic[0]:
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Purged {chronic[0]} chronically-failing routes")
         rep_cutoff = timezone.now() - timedelta(days=14)
         NodeReputation.objects.filter(
             Q(last_success__lt=rep_cutoff) | Q(last_success__isnull=True),
