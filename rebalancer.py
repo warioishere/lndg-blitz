@@ -377,11 +377,8 @@ def get_out_cans(rebalance, auto_rebalance_channels):
             auto_rebalance_channels
             .filter(percent_outbound__gte=F('ar_out_target'))
             .filter(
-                Q(auto_rebalance=False)
-                | Q(
-                    ar_source=True,
-                    local_fee_rate__lt=F('ar_source_ppm_diff')
-                )
+                Q(ar_source=True)        # explicitly enabled as source in Advanced Rebalancing
+                | Q(auto_rebalance=False) # non-AR-managed channels are free to drain
             )
             .exclude(remote_pubkey__in=exclude_keys)
             .order_by('htlc_count')
@@ -1318,11 +1315,8 @@ def auto_schedule() -> List[Rebalancer]:
             auto_rebalance_channels
             .filter(percent_outbound__gte=F('ar_out_target'))
             .filter(
-                Q(auto_rebalance=False)
-                | Q(
-                    ar_source=True,
-                    local_fee_rate__lt=F('ar_source_ppm_diff')
-                )
+                Q(ar_source=True)        # explicitly enabled as source in Advanced Rebalancing
+                | Q(auto_rebalance=False) # non-AR-managed channels are free to drain
             )
             .order_by('htlc_count')
             .values_list('chan_id', flat=True)
