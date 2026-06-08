@@ -429,6 +429,14 @@ def get_source_fee_map(chan_ids):
     )
 
 @sync_to_async
+def get_source_diff_map(chan_ids):
+    """Build a map of chan_id -> ar_source_ppm_diff for outbound channels."""
+    return dict(
+        Channels.objects.filter(chan_id__in=[str(c) for c in chan_ids])
+        .values_list('chan_id', 'ar_source_ppm_diff')
+    )
+
+@sync_to_async
 def get_target_info(last_hop_pubkey):
     """Return (local_fee_rate, ar_max_cost) for the target channel, or None."""
     ch = Channels.objects.filter(
@@ -840,17 +848,23 @@ async def run_rebalancer(rebalance, worker):
 
             # Load opportunity cost data for this rebalance
             source_fee_map = await get_source_fee_map(chan_ids)
+            source_diff_map = await get_source_diff_map(chan_ids)
             target_fee_rate, ar_max_cost = await get_target_info(rebalance.last_hop_pubkey)
             max_fee_rate = await get_max_fee_rate()
             opp_cost_enabled = target_fee_rate is not None and ar_max_cost is not None
 
-            # Pre-filter outbound channels: remove those whose opportunity cost
-            # alone exceeds the budget (spread * ar_max_cost%)
+            # Pre-filter outbound channels: drop sources whose own ar_source_ppm_diff
+            # spread requirement isn't met by this target, and those whose opportunity
+            # cost alone exceeds the budget (target_fee * ar_max_cost%)
             if opp_cost_enabled and not rebalance.manual:
                 original_count = len(chan_ids)
                 filtered_ids = []
                 for cid in chan_ids:
                     src_fee = source_fee_map.get(str(cid), source_fee_map.get(cid, 0))
+                    src_diff = source_diff_map.get(str(cid), source_diff_map.get(cid, 0)) or 0
+                    if target_fee_rate < src_fee + src_diff:
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {cid} (target fee {target_fee_rate} < source {src_fee} + ppm_diff {src_diff} for {rebalance.target_alias})")
+                        continue
                     max_route_ppm = int(target_fee_rate * (ar_max_cost / 100)) - src_fee
                     if max_route_ppm > 0:
                         filtered_ids.append(cid)
