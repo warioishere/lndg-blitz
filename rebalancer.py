@@ -1250,6 +1250,8 @@ async def run_rebalancer(rebalance, worker):
 
 @sync_to_async
 def estimate_liquidity( payment ):
+    if payment is None:
+        return 0
     try:
         estimated_liquidity = 0
         if payment.status == 3:
