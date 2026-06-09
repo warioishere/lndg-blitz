@@ -44,6 +44,37 @@ _FAILED_PAIR_EXPIRY = 300  # 5 minutes (regolancer default)
 _active_sources = set()
 _sources_lock = asyncio.Lock()
 
+# GetChanInfo cache for max_htlc_msat lookups: chan_id -> (monotonic_ts, info)
+_chan_info_cache = {}
+_CHAN_INFO_TTL = 300  # seconds
+
+
+def _max_amount_on_route_msat(stub, route):
+    """Walk the route and return the smallest max_htlc_msat across hops, or 0 on error.
+
+    For each hop, use the policy of the side *opposite* to hop.pub_key (the forwarder).
+    Mirrors regolancer's maxAmountOnRoute (mission_ctl.go).
+    """
+    cap = None
+    now = monotonic()
+    for hop in route.hops:
+        chan_id = int(hop.chan_id)
+        cached = _chan_info_cache.get(chan_id)
+        if cached and now - cached[0] < _CHAN_INFO_TTL:
+            info = cached[1]
+        else:
+            try:
+                info = stub.GetChanInfo(ln.ChanInfoRequest(chan_id=chan_id))
+                _chan_info_cache[chan_id] = (now, info)
+            except Exception:
+                continue
+        # Policy of the side forwarding to hop.pub_key
+        policy = info.node1_policy if hop.pub_key == info.node2_pub else info.node2_policy
+        mh = getattr(policy, 'max_htlc_msat', 0) or 0
+        if mh > 0 and (cap is None or mh < cap):
+            cap = mh
+    return cap or 0
+
 
 def _prune_failed_pairs():
     """Remove expired entries from the failure cache."""
@@ -821,8 +852,9 @@ async def run_rebalancer(rebalance, worker):
         # Check if LocalSetting LND-EnableMPP exists and set allow_mpp accordingly
         allow_multishards = await check_and_set_allow_multishards()  # Default value is True.
         max_parts = None if allow_multishards else 1  # Adjust max_parts based on the allow_multishards value
-        #Reduce potential rebalance value in percent out to avoid going below AR-OUT-Target
-        auto_rebalance_channels = Channels.objects.filter(is_active=True, is_open=True, private=False).annotate(percent_outbound=((Sum('local_balance')+Sum('pending_outbound')-rebalance.value)*100)/Sum('capacity')).annotate(inbound_can=(((Sum('remote_balance')+Sum('pending_inbound'))*100)/Sum('capacity'))/Sum('ar_in_target'))
+        #Reduce potential rebalance value in percent out to avoid going below AR-OUT-Target,
+        # accounting for local_chan_reserve so we don't count sats we can't actually spend.
+        auto_rebalance_channels = Channels.objects.filter(is_active=True, is_open=True, private=False).annotate(percent_outbound=((Sum('local_balance')+Sum('pending_outbound')-Sum('local_chan_reserve')-rebalance.value)*100)/Sum('capacity')).annotate(inbound_can=(((Sum('remote_balance')+Sum('pending_inbound'))*100)/Sum('capacity'))/Sum('ar_in_target'))
         outbound_cans = await get_out_cans(rebalance, auto_rebalance_channels)
         if len(outbound_cans) == 0 and rebalance.manual == False:
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : No outbound_cans")
@@ -924,6 +956,15 @@ async def run_rebalancer(rebalance, worker):
                             for k in sr.route.split('-')
                         ]
                         cltv_delta = sr.final_cltv_delta or 144
+                    # Cap by smallest max_htlc_msat across the route's hops to skip
+                    # routes that physically can't carry this amount.
+                    if sr.route_hex:
+                        cap_msat = await sync_to_async(_max_amount_on_route_msat)(stub, parsed_sr)
+                        if cap_msat and rebalance.value * 1000 > cap_msat:
+                            print(
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route via {sr.outgoing_chan_id} max_htlc cap is {cap_msat // 1000} sats, less than rebalance value {rebalance.value} - skipping"
+                            )
+                            continue
                     build = await routerstub.BuildRoute(
                         lnr.BuildRouteRequest(
                             outgoing_chan_id=int(sr.outgoing_chan_id),
@@ -1110,6 +1151,17 @@ async def run_rebalancer(rebalance, worker):
                 if allowed_sources is not None:
                     ordered_sources = [c for c in ordered_sources if str(c) in {str(x) for x in allowed_sources}]
 
+                # If every remaining (source, target) pair is in the failure cache,
+                # clear those entries so they get another shot — matches regolancer's
+                # mcCache reset when there are no pairs left (channels.go:128).
+                if ordered_sources and all(
+                    _is_pair_failed(c, rebalance.last_hop_pubkey)
+                    for c in ordered_sources
+                ):
+                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : All {len(ordered_sources)} (source, target) pairs cached as failed for {rebalance.target_alias} — invalidating cache for a fresh attempt")
+                    for c in ordered_sources:
+                        _failed_pairs.pop((str(c), rebalance.last_hop_pubkey), None)
+
                 for source_chan in ordered_sources:
                     # Skip pairs that recently failed
                     if _is_pair_failed(source_chan, rebalance.last_hop_pubkey):
@@ -1228,8 +1280,9 @@ async def run_rebalancer(rebalance, worker):
             if rebalance.status ==2:
                 if successful_in is not None and successful_out is not None:
                     await update_channels(stub, successful_in, successful_out)
-                #Reduce potential rebalance value in percent out to avoid going below AR-OUT-Target
-                auto_rebalance_channels = Channels.objects.filter(is_active=True, is_open=True, private=False).annotate(percent_outbound=((Sum('local_balance')+Sum('pending_outbound')-rebalance.value*inc)*100)/Sum('capacity')).annotate(inbound_can=(((Sum('remote_balance')+Sum('pending_inbound'))*100)/Sum('capacity'))/Sum('ar_in_target'))
+                #Reduce potential rebalance value in percent out to avoid going below AR-OUT-Target,
+                # subtracting local_chan_reserve (sats we cant actually spend).
+                auto_rebalance_channels = Channels.objects.filter(is_active=True, is_open=True, private=False).annotate(percent_outbound=((Sum('local_balance')+Sum('pending_outbound')-Sum('local_chan_reserve')-rebalance.value*inc)*100)/Sum('capacity')).annotate(inbound_can=(((Sum('remote_balance')+Sum('pending_inbound'))*100)/Sum('capacity'))/Sum('ar_in_target'))
                 inbound_cans = auto_rebalance_channels.filter(remote_pubkey=rebalance.last_hop_pubkey).filter(auto_rebalance=True, inbound_can__gte=1)
                 outbound_cans = await get_out_cans(rebalance, auto_rebalance_channels)
                 if await inbound_cans_len(inbound_cans) > 0 and len(outbound_cans) > 0:
@@ -1321,7 +1374,9 @@ def auto_schedule() -> List[Rebalancer]:
         if enabled == 0:
             return []
         
-        auto_rebalance_channels = Channels.objects.filter(is_active=True, is_open=True, private=False).annotate(percent_outbound=((Sum('local_balance')+Sum('pending_outbound'))*100)/Sum('capacity')).annotate(inbound_can=(((Sum('remote_balance')+Sum('pending_inbound'))*100)/Sum('capacity'))/Sum('ar_in_target'))
+        # percent_outbound is computed on USABLE local liquidity (local_balance - local_chan_reserve)
+        # so channels sitting right at their reserve floor don't qualify as sources.
+        auto_rebalance_channels = Channels.objects.filter(is_active=True, is_open=True, private=False).annotate(percent_outbound=((Sum('local_balance')+Sum('pending_outbound')-Sum('local_chan_reserve'))*100)/Sum('capacity')).annotate(inbound_can=(((Sum('remote_balance')+Sum('pending_inbound'))*100)/Sum('capacity'))/Sum('ar_in_target'))
         if len(auto_rebalance_channels) == 0:
             return []
         
