@@ -42,7 +42,10 @@ def get_node_info_cached(pubkey, stub, expiry_minutes=60, max_entries=500):
         info = ParseDict(cache.data, ln.NodeInfo())
     else:
         try:
-            info = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=pubkey, include_channels=False))
+            # 5s gRPC timeout so a single unresponsive GetNodeInfo can't
+            # block the entire [Data] loop. Fall back to stale cache (or an
+            # empty NodeInfo if we have nothing) on failure.
+            info = stub.GetNodeInfo(ln.NodeInfoRequest(pub_key=pubkey, include_channels=False), timeout=5)
             NodeCache.objects.update_or_create(
                 pubkey=pubkey,
                 defaults={'data': MessageToDict(info), 'updated_at': timezone.now()},
@@ -51,7 +54,7 @@ def get_node_info_cached(pubkey, stub, expiry_minutes=60, max_entries=500):
             if cache:
                 info = ParseDict(cache.data, ln.NodeInfo())
             else:
-                raise
+                info = ln.NodeInfo()
 
     if len(_memory_cache) >= max_entries:
         _memory_cache.popitem(last=False)
