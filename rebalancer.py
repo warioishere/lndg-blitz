@@ -941,8 +941,9 @@ async def run_rebalancer(rebalance, worker):
             stub = lnrpc.LightningStub(channel)
             routerstub = lnrouter.RouterStub(async_channel)
             chan_ids = json.loads(rebalance.outgoing_chan_ids)
-            # Filter channels: for peers with multiple channels, only send the one with lowest HTLC count
-            chan_ids = sort_channels_by_htlc(stub, chan_ids)
+            # Filter channels: for peers with multiple channels, only send the one with lowest HTLC count.
+            # Wrapped in sync_to_async because sort_channels_by_htlc now also does ORM lookups for aliases.
+            chan_ids = await sync_to_async(sort_channels_by_htlc)(stub, chan_ids)
 
             # Load opportunity cost data for this rebalance
             source_fee_map = await get_source_fee_map(chan_ids)
