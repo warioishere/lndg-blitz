@@ -263,6 +263,8 @@ async def try_single_source(
     per_source_fee_limit_sat = int(per_source_route_ppm * rebalance.value / 1_000_000)
     if per_source_fee_limit_sat <= 0:
         return None
+    src_alias = await sync_to_async(lambda: Channels.objects.filter(chan_id=str(source_chan_id)).values_list('alias', flat=True).first())() or "?"
+    src_label = f"{source_chan_id} ({src_alias})"
 
     # QueryRoutes for a self-payment rebalance: destination is US, last hop is
     # the target peer (matches regolancer routes.go:102-110). LND then constructs
@@ -280,7 +282,7 @@ async def try_single_source(
             )
         )
     except Exception as e:
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : QueryRoutes via {source_chan_id} failed: {e}")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : QueryRoutes via {src_label} failed: {e}")
         return None
 
     if not qr_response or not qr_response.routes:
@@ -292,7 +294,7 @@ async def try_single_source(
         # Validate against the failed-edge cache: skip routes that reuse a
         # known-bad (prev → next) edge at a similar amount.
         if not _validate_route(query_route):
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} skipped — reuses a cached failed edge")
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {src_label} skipped — reuses a cached failed edge")
             continue
         # Extract hop pubkeys for BuildRoute
         hop_keys = [bytes.fromhex(h.pub_key) for h in query_route.hops]
@@ -313,7 +315,7 @@ async def try_single_source(
                 )
             )
         except Exception as e:
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {source_chan_id} failed: {e}")
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {src_label} failed: {e}")
             continue
 
         # Opportunity-cost check (uses total_fees_msat which already includes inbound discounts)
@@ -323,19 +325,19 @@ async def try_single_source(
             target_fee_rate, ar_max_cost, max_fee_rate,
         )
         if not allowed:
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} rejected: route {route_fee_ppm} ppm > max {max_route_ppm} ppm (target {target_fee_rate}*{ar_max_cost}% - src {src_fee})")
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {src_label} rejected: route {route_fee_ppm} ppm > max {max_route_ppm} ppm (target {target_fee_rate}*{ar_max_cost}% - src {src_fee})")
             continue
 
         # Global fee_limit check (safety, in case the per-source budget is looser than rebalance.fee_limit)
         if build.route.total_fees_msat > fee_limit_msat:
             actual_ppm = int((build.route.total_fees_msat / (rebalance.value * 1000)) * 1000000)
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} exceeds rebalance fee_limit ({actual_ppm} ppm > {int(fee_limit_msat/rebalance.value*1000)} ppm)")
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {src_label} exceeds rebalance fee_limit ({actual_ppm} ppm > {int(fee_limit_msat/rebalance.value*1000)} ppm)")
             continue
 
         route_msg = build.route
         rebuilt_hex = route_msg.SerializeToString().hex()
 
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Sending via {source_chan_id}: {len(route_msg.hops)} hops, {route_fee_ppm} ppm route + {src_fee} ppm source")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Sending via {src_label}: {len(route_msg.hops)} hops, {route_fee_ppm} ppm route + {src_fee} ppm source")
 
         try:
             send_response = await routerstub.SendToRouteV2(
@@ -346,7 +348,7 @@ async def try_single_source(
                 timeout=timeout,
             )
         except Exception as e:
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : SendToRouteV2 via {source_chan_id} error: {e}")
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : SendToRouteV2 via {src_label} error: {e}")
             return None
 
         # HTLCStatus: 1 = SUCCEEDED
@@ -373,7 +375,7 @@ async def try_single_source(
         code_num = getattr(failure, "code", None) if failure else None
         fsi = getattr(failure, "failure_source_index", None) if failure else None
         reason = FAILURE_CODE_NAMES.get(code_num, code_num)
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} failed: code={reason} hop={fsi}")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {src_label} failed: code={reason} hop={fsi}")
         _record_route_failure(route_msg, failure)
         await update_route(rebalance.last_hop_pubkey, source_chan_id, rebuilt_hex, False)
         await update_node_reputations(rebuilt_hex, False, fsi)
@@ -385,7 +387,7 @@ async def try_single_source(
                 routerstub, hop_keys, source_chan_id, cltv_delta, rebalance.value,
             )
             if probed > 0:
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe found max {probed} sats via {source_chan_id}")
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe found max {probed} sats via {src_label}")
                 probe_invoice = stub.AddInvoice(ln.Invoice(value=probed, expiry=timeout))
                 try:
                     probe_build = await routerstub.BuildRoute(
@@ -406,7 +408,7 @@ async def try_single_source(
                     target_fee_rate, ar_max_cost, max_fee_rate,
                 )
                 if not p_allowed:
-                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probed route via {source_chan_id} rejected: {p_ppm} ppm > {p_max} ppm")
+                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probed route via {src_label} rejected: {p_ppm} ppm > {p_max} ppm")
                     continue
                 try:
                     probe_response = await routerstub.SendToRouteV2(
@@ -456,7 +458,9 @@ def get_out_cans(rebalance, auto_rebalance_channels):
             .values_list('chan_id', flat=True)
         )
         if len(result) > 1:
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : get_out_cans: Found {len(result)} candidate channels (ordered by DB htlc_count): {result}")
+            alias_lookup = dict(Channels.objects.filter(chan_id__in=[str(c) for c in result]).values_list('chan_id', 'alias'))
+            labeled = [f"{c} ({alias_lookup.get(str(c)) or '?'})" for c in result]
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : get_out_cans: Found {len(result)} candidate channels (ordered by DB htlc_count): {labeled}")
         return result
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting outbound cands: {str(e)}")
@@ -506,6 +510,19 @@ def get_source_diff_map(chan_ids):
         Channels.objects.filter(chan_id__in=[str(c) for c in chan_ids])
         .values_list('chan_id', 'ar_source_ppm_diff')
     )
+
+@sync_to_async
+def get_source_alias_map(chan_ids):
+    """Build a map of chan_id -> alias for log readability."""
+    return dict(
+        Channels.objects.filter(chan_id__in=[str(c) for c in chan_ids])
+        .values_list('chan_id', 'alias')
+    )
+
+def _label(cid, alias_map):
+    """Format a chan_id as 'chan_id (alias)' for logs; falls back to plain chan_id."""
+    alias = alias_map.get(str(cid)) or alias_map.get(cid)
+    return f"{cid} ({alias})" if alias else str(cid)
 
 @sync_to_async
 def get_target_info(last_hop_pubkey):
@@ -841,6 +858,9 @@ def sort_channels_by_htlc(stub, chan_ids):
 
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Checking {len(chan_ids)} channels from DB")
 
+        # Pre-fetch aliases for log readability
+        alias_map = dict(Channels.objects.filter(chan_id__in=[str(c) for c in chan_ids]).values_list('chan_id', 'alias'))
+
         # Get current channel state from LND
         channels = stub.ListChannels(ln.ListChannelsRequest(active_only=False)).channels
 
@@ -853,7 +873,8 @@ def sort_channels_by_htlc(stub, chan_ids):
                     'htlc_count': htlc_count,
                     'remote_pubkey': c.remote_pubkey
                 }
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Chan {c.chan_id} has {htlc_count} pending HTLCs (peer: {c.remote_pubkey[:16]}...)")
+                alias = alias_map.get(str(c.chan_id)) or "?"
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Chan {c.chan_id} ({alias}) has {htlc_count} pending HTLCs")
 
         # Group channels by peer
         peer_channels = {}  # remote_pubkey -> [(chan_id, htlc_count), ...]
@@ -874,13 +895,18 @@ def sort_channels_by_htlc(stub, chan_ids):
                 sorted_peer_chans = sorted(peer_chan_list, key=lambda x: x[1])
                 selected = sorted_peer_chans[0]
                 filtered_ids.append(selected[0])
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Peer {peer[:16]}... has {len(peer_chan_list)} channels - selected chan {selected[0]} with {selected[1]} HTLCs, excluded: {[f'{c[0]}({c[1]} HTLCs)' for c in sorted_peer_chans[1:]]}")
+                peer_alias = alias_map.get(str(selected[0])) or "?"
+                sel_label = f"{selected[0]} ({peer_alias})"
+                excl_labels = [f"{c[0]} ({alias_map.get(str(c[0])) or '?'}; {c[1]} HTLCs)" for c in sorted_peer_chans[1:]]
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Peer {peer_alias} has {len(peer_chan_list)} channels - selected {sel_label} with {selected[1]} HTLCs, excluded: {excl_labels}")
             else:
                 # Single channel to this peer - include it
                 filtered_ids.append(peer_chan_list[0][0])
 
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Original list: {chan_ids}")
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Filtered list: {filtered_ids} (removed {len(chan_ids) - len(filtered_ids)} channels)")
+        orig_labels = [f"{c} ({alias_map.get(str(c)) or '?'})" for c in chan_ids]
+        filt_labels = [f"{c} ({alias_map.get(str(c)) or '?'})" for c in filtered_ids]
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Original list: {orig_labels}")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Filtered list: {filt_labels} (removed {len(chan_ids) - len(filtered_ids)} channels)")
 
         return filtered_ids
     except Exception as e:
@@ -921,6 +947,7 @@ async def run_rebalancer(rebalance, worker):
             # Load opportunity cost data for this rebalance
             source_fee_map = await get_source_fee_map(chan_ids)
             source_diff_map = await get_source_diff_map(chan_ids)
+            source_alias_map = await get_source_alias_map(chan_ids)
             target_fee_rate, ar_max_cost = await get_target_info(rebalance.last_hop_pubkey)
             max_fee_rate = await get_max_fee_rate()
             opp_cost_enabled = target_fee_rate is not None and ar_max_cost is not None
@@ -935,13 +962,13 @@ async def run_rebalancer(rebalance, worker):
                     src_fee = source_fee_map.get(str(cid), source_fee_map.get(cid, 0))
                     src_diff = source_diff_map.get(str(cid), source_diff_map.get(cid, 0)) or 0
                     if target_fee_rate < src_fee + src_diff:
-                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {cid} (target fee {target_fee_rate} < source {src_fee} + ppm_diff {src_diff} for {rebalance.target_alias})")
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {_label(cid, source_alias_map)} (target fee {target_fee_rate} < source {src_fee} + ppm_diff {src_diff} for {rebalance.target_alias})")
                         continue
                     max_route_ppm = int(target_fee_rate * (ar_max_cost / 100)) - src_fee
                     if max_route_ppm > 0:
                         filtered_ids.append(cid)
                     else:
-                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {cid} (outbound fee {src_fee} ppm eats entire budget for target {rebalance.target_alias})")
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {_label(cid, source_alias_map)} (outbound fee {src_fee} ppm eats entire budget for target {rebalance.target_alias})")
                 chan_ids = filtered_ids
                 if len(chan_ids) < original_count:
                     print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Opportunity cost filter: {original_count} -> {len(chan_ids)} outbound channels")
@@ -976,8 +1003,10 @@ async def run_rebalancer(rebalance, worker):
             fee_limit_msat = int(rebalance.fee_limit * 1000)
             payment_response = None
             tried_saved_sources = set()  # chan_ids actually attempted on the wire via saved routes
+            saved_alias_map = await get_source_alias_map([sr.outgoing_chan_id for sr in saved_routes]) if saved_routes else {}
             for sr in saved_routes:
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Trying saved route via {sr.outgoing_chan_id}")
+                sr_label = _label(sr.outgoing_chan_id, saved_alias_map)
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Trying saved route via {sr_label}")
                 rebuilt_hex = None
                 try:
                     if sr.route_hex:
@@ -1002,13 +1031,13 @@ async def run_rebalancer(rebalance, worker):
                         cap_msat = await sync_to_async(_max_amount_on_route_msat)(stub, parsed_sr)
                         if cap_msat and rebalance.value * 1000 > cap_msat:
                             print(
-                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route via {sr.outgoing_chan_id} max_htlc cap is {cap_msat // 1000} sats, less than rebalance value {rebalance.value} - skipping"
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route via {sr_label} max_htlc cap is {cap_msat // 1000} sats, less than rebalance value {rebalance.value} - skipping"
                             )
                             continue
                         # Skip routes that reuse a known-bad edge at a similar amount.
                         if not _validate_route(parsed_sr):
                             print(
-                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route via {sr.outgoing_chan_id} skipped — reuses a cached failed edge"
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route via {sr_label} skipped — reuses a cached failed edge"
                             )
                             continue
                     build = await routerstub.BuildRoute(
@@ -1021,7 +1050,7 @@ async def run_rebalancer(rebalance, worker):
                         )
                     )
                     print(
-                        f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute succeeded via {sr.outgoing_chan_id}"
+                        f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute succeeded via {sr_label}"
                     )
 
                     # Check opportunity cost: route_fee + source_outbound_fee must fit within per-source budget
@@ -1034,7 +1063,7 @@ async def run_rebalancer(rebalance, worker):
                         if not allowed:
                             src_fee = source_fee_map.get(str(sr.outgoing_chan_id), source_fee_map.get(sr.outgoing_chan_id, 0))
                             print(
-                                f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr.outgoing_chan_id} rejected: route {total_ppm} ppm + source {src_fee} ppm outbound, max route budget {budget_ppm} ppm (target {target_fee_rate} * {ar_max_cost}% - {src_fee} source) - skipping"
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr_label} rejected: route {total_ppm} ppm + source {src_fee} ppm outbound, max route budget {budget_ppm} ppm (target {target_fee_rate} * {ar_max_cost}% - {src_fee} source) - skipping"
                             )
                             payment_response = None
                             continue
@@ -1042,7 +1071,7 @@ async def run_rebalancer(rebalance, worker):
                     if build.route.total_fees_msat > fee_limit_msat:
                         actual_ppm = (build.route.total_fees_msat / (rebalance.value * 1000)) * 1000000
                         print(
-                            f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr.outgoing_chan_id} exceeds fee limit ({build.route.total_fees_msat} > {fee_limit_msat} msat, {int(actual_ppm)} ppm) - skipping without penalty"
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute via {sr_label} exceeds fee limit ({build.route.total_fees_msat} > {fee_limit_msat} msat, {int(actual_ppm)} ppm) - skipping without penalty"
                         )
                         await update_route_fee(sr, actual_ppm)
                         payment_response = None
@@ -1075,7 +1104,7 @@ async def run_rebalancer(rebalance, worker):
                             successful_out = payment_response.route.hops[0].chan_id
                             successful_in = payment_response.route.hops[-1].chan_id
                             print(
-                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route succeeded via {sr.outgoing_chan_id} - hash: {rebalance.payment_hash}"
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route succeeded via {sr_label} - hash: {rebalance.payment_hash}"
                             )
                             print(
                                 f"{datetime.now().strftime('%c')} : [Rebalancer] : Used outgoing chan_id: {successful_out}, incoming chan_id: {successful_in}"
@@ -1104,7 +1133,7 @@ async def run_rebalancer(rebalance, worker):
                             reason = "no-details"
                             detail = "not set"
                         print(
-                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route failed via {sr.outgoing_chan_id} - code: {reason} - detail: {detail} - failure_hop: {fsi}"
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route failed via {sr_label} - code: {reason} - detail: {detail} - failure_hop: {fsi}"
                         )
                         _record_route_failure(route_msg, failure)
                         await update_route(
@@ -1140,7 +1169,7 @@ async def run_rebalancer(rebalance, worker):
                                         target_fee_rate, ar_max_cost, max_fee_rate
                                     )
                                     if not opp_ok:
-                                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe via {sr.outgoing_chan_id} rejected: route {opp_total} ppm exceeds budget {opp_budget} ppm after opportunity cost")
+                                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe via {sr_label} rejected: route {opp_total} ppm exceeds budget {opp_budget} ppm after opportunity cost")
                                 if opp_ok and probe_build.route.total_fees_msat <= scaled_fee_limit:
                                     probe_response = await routerstub.SendToRouteV2(
                                         lnr.SendToRouteRequest(
@@ -1162,11 +1191,11 @@ async def run_rebalancer(rebalance, worker):
                                         rebuilt_hex = probe_build.route.SerializeToString().hex()
                                         await update_route(rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, True, forgive_failure=True)
                                         await update_node_reputations(rebuilt_hex, True)
-                                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe payment succeeded: {probed} sats via {sr.outgoing_chan_id}")
+                                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Probe payment succeeded: {probed} sats via {sr_label}")
                                         break
                 except Exception as e:
                     print(
-                        f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute failed via {sr.outgoing_chan_id} - {e}"
+                        f"{datetime.now().strftime('%c')} : [Rebalancer] : BuildRoute failed via {sr_label} - {e}"
                     )
                     if rebuilt_hex is not None:
                         await update_route(
@@ -1220,7 +1249,7 @@ async def run_rebalancer(rebalance, worker):
                             rebalance.value = result['value']
                         successful_out = result['successful_out']
                         successful_in = result['successful_in']
-                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Per-source succeeded via {source_chan} - hash: {rebalance.payment_hash}")
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Per-source succeeded via {_label(source_chan, source_alias_map)} - hash: {rebalance.payment_hash}")
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Used outgoing chan_id: {successful_out}, incoming chan_id: {successful_in}")
                         payment_response = None  # signal success to RapidFire via rebalance.status=2
                         break
@@ -1301,7 +1330,7 @@ async def run_rebalancer(rebalance, worker):
             await close_shared_async_channel()
             rebalance.stop = datetime.now()
             await save_record(rebalance)
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : {worker} completed payment attempts for: {rebalance.payment_hash}")
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : {worker} completed payment attempts for {rebalance.target_alias}: {rebalance.payment_hash}")
             original_alias = rebalance.target_alias
             inc=1.21
             dec=2
@@ -1478,7 +1507,8 @@ def auto_schedule() -> List[Rebalancer]:
                 new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str([source_id]), last_hop_pubkey=pub, target_alias=target.alias, duration=target_time)
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Creating Auto Rebalance Request for allowed target {pub} via {source_id}")
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Value: {target_value} / {target.ar_amt_target} | Fee: {target_fee} | Duration: {target_time}")
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: {[source_id]}")
+                src_alias = Channels.objects.filter(chan_id=str(source_id)).values_list('alias', flat=True).first() or "?"
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: [{source_id} ({src_alias})]")
                 new_rebalance.save()
                 to_schedule.append(new_rebalance)
                 scheduled_targets.add(pub)
@@ -1501,7 +1531,9 @@ def auto_schedule() -> List[Rebalancer]:
                         continue
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Creating Auto Rebalance Request for: {target.chan_id}")
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Value: {target_value} / {target.ar_amt_target} | Fee: {target_fee} | Duration: {target_time}")
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: {outbound_cans}")
+                out_alias_map = dict(Channels.objects.filter(chan_id__in=[str(c) for c in outbound_cans]).values_list('chan_id', 'alias'))
+                out_labels = [f"{c} ({out_alias_map.get(str(c)) or '?'})" for c in outbound_cans]
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: {out_labels}")
                 new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str(outbound_cans).replace('\'', ''), last_hop_pubkey=target.remote_pubkey, target_alias=target.alias, duration=target_time)
                 new_rebalance.save()
                 to_schedule.append(new_rebalance)
