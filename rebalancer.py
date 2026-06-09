@@ -34,10 +34,15 @@ from gui.models import (
 from utils import get_local_setting
 
 # Per-source rebalance coordination (shared across workers)
-# Failure cache: (source_chan_id_str, target_pubkey) -> monotonic expiration
-# Prevents retrying a pair that recently failed
-_failed_pairs = {}
-_FAILED_PAIR_EXPIRY = 300  # 5 minutes (regolancer default)
+# Failed-edge cache: (prev_pubkey, hop_pubkey) -> (monotonic_ts, amount_msat)
+# Tracks TEMPORARY_CHANNEL_FAILUREs at the directed edge between two adjacent
+# hop nodes for the amount that was being forwarded at the time. Matches
+# regolancer's mcCache (mission_ctl.go). A candidate route is invalidated only
+# if it actually re-uses one of these edges at a similar amount, so a failure
+# between, say, our peer and node X doesn't block routes through node Y.
+_failed_edges = {}
+_FAILED_EDGE_EXPIRY = 600  # 10 minutes
+_FAILED_EDGE_TOLERANCE_PPM = 50_000  # 5% — match regolancer's FailTolerance default
 
 # Active sources: chan_id_str currently locked by a worker
 # Prevents two workers from using the same source channel simultaneously
@@ -76,25 +81,61 @@ def _max_amount_on_route_msat(stub, route):
     return cap or 0
 
 
-def _prune_failed_pairs():
-    """Remove expired entries from the failure cache."""
+def _prune_failed_edges():
     now = monotonic()
-    expired = [k for k, exp in _failed_pairs.items() if exp < now]
+    expired = [k for k, (ts, _) in _failed_edges.items() if now - ts > _FAILED_EDGE_EXPIRY]
     for k in expired:
-        _failed_pairs.pop(k, None)
+        _failed_edges.pop(k, None)
 
 
-def _is_pair_failed(source_chan_id, target_pubkey):
-    """Check if (source, target) pair is currently in the failure cache."""
-    _prune_failed_pairs()
-    key = (str(source_chan_id), target_pubkey)
-    return key in _failed_pairs
+def _mark_edge_failed(prev_pubkey, hop_pubkey, amount_msat):
+    """Cache (prev → hop) as failed at amount_msat."""
+    if not prev_pubkey or not hop_pubkey:
+        return
+    _failed_edges[(prev_pubkey, hop_pubkey)] = (monotonic(), int(amount_msat or 0))
 
 
-def _mark_pair_failed(source_chan_id, target_pubkey):
-    """Add (source, target) to failure cache for 5 minutes."""
-    key = (str(source_chan_id), target_pubkey)
-    _failed_pairs[key] = monotonic() + _FAILED_PAIR_EXPIRY
+def _record_route_failure(route, failure):
+    """If `failure` is a TEMPORARY_CHANNEL_FAILURE, cache the failing edge.
+
+    Mirrors regolancer payment.go:128-131: the failing edge is from the
+    previous hop to the failure-source hop, and the recorded amount is what
+    the previous hop was forwarding.
+    """
+    if route is None or failure is None:
+        return
+    code = getattr(failure, 'code', None)
+    fsi = getattr(failure, 'failure_source_index', None)
+    if code != 15 or fsi is None or fsi <= 0:
+        return
+    hops = list(route.hops)
+    if fsi >= len(hops):
+        return
+    prev = hops[fsi - 1]
+    failed = hops[fsi]
+    _mark_edge_failed(prev.pub_key, failed.pub_key, getattr(prev, 'amt_to_forward_msat', 0))
+
+
+def _validate_route(route):
+    """Return True if no consecutive hop edge in `route` is cached as failed
+    at a similar amount (within _FAILED_EDGE_TOLERANCE_PPM)."""
+    _prune_failed_edges()
+    if route is None or len(route.hops) < 2:
+        return True
+    for i in range(len(route.hops) - 1):
+        key = (route.hops[i].pub_key, route.hops[i + 1].pub_key)
+        cached = _failed_edges.get(key)
+        if not cached:
+            continue
+        _, failed_amt_msat = cached
+        cur_amt_msat = getattr(route.hops[i], 'amt_to_forward_msat', 0) or 0
+        if cur_amt_msat <= 0 or failed_amt_msat <= 0:
+            return False
+        denom = max(failed_amt_msat, cur_amt_msat)
+        diff_ppm = abs(failed_amt_msat - cur_amt_msat) * 1_000_000 // denom
+        if diff_ppm <= _FAILED_EDGE_TOLERANCE_PPM:
+            return False
+    return True
 
 
 async def _try_acquire_source(source_chan_id):
@@ -255,6 +296,11 @@ async def try_single_source(
     for query_route in qr_response.routes:
         if not query_route.hops:
             continue
+        # Validate against the failed-edge cache: skip routes that reuse a
+        # known-bad (prev → next) edge at a similar amount.
+        if not _validate_route(query_route):
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} skipped — reuses a cached failed edge")
+            continue
         # Extract hop pubkeys for BuildRoute
         hop_keys = [bytes.fromhex(h.pub_key) for h in query_route.hops]
         if len(query_route.hops) >= 2:
@@ -335,6 +381,7 @@ async def try_single_source(
         fsi = getattr(failure, "failure_source_index", None) if failure else None
         reason = FAILURE_CODE_NAMES.get(code_num, code_num)
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Route via {source_chan_id} failed: code={reason} hop={fsi}")
+        _record_route_failure(route_msg, failure)
         await update_route(rebalance.last_hop_pubkey, source_chan_id, rebuilt_hex, False)
         await update_node_reputations(rebuilt_hex, False, fsi)
 
@@ -965,6 +1012,12 @@ async def run_rebalancer(rebalance, worker):
                                 f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route via {sr.outgoing_chan_id} max_htlc cap is {cap_msat // 1000} sats, less than rebalance value {rebalance.value} - skipping"
                             )
                             continue
+                        # Skip routes that reuse a known-bad edge at a similar amount.
+                        if not _validate_route(parsed_sr):
+                            print(
+                                f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route via {sr.outgoing_chan_id} skipped — reuses a cached failed edge"
+                            )
+                            continue
                     build = await routerstub.BuildRoute(
                         lnr.BuildRouteRequest(
                             outgoing_chan_id=int(sr.outgoing_chan_id),
@@ -1060,6 +1113,7 @@ async def run_rebalancer(rebalance, worker):
                         print(
                             f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route failed via {sr.outgoing_chan_id} - code: {reason} - detail: {detail} - failure_hop: {fsi}"
                         )
+                        _record_route_failure(route_msg, failure)
                         await update_route(
                             rebalance.last_hop_pubkey, sr.outgoing_chan_id, rebuilt_hex, False
                         )
@@ -1151,22 +1205,7 @@ async def run_rebalancer(rebalance, worker):
                 if allowed_sources is not None:
                     ordered_sources = [c for c in ordered_sources if str(c) in {str(x) for x in allowed_sources}]
 
-                # If every remaining (source, target) pair is in the failure cache,
-                # clear those entries so they get another shot — matches regolancer's
-                # mcCache reset when there are no pairs left (channels.go:128).
-                if ordered_sources and all(
-                    _is_pair_failed(c, rebalance.last_hop_pubkey)
-                    for c in ordered_sources
-                ):
-                    print(f"{datetime.now().strftime('%c')} : [Rebalancer] : All {len(ordered_sources)} (source, target) pairs cached as failed for {rebalance.target_alias} — invalidating cache for a fresh attempt")
-                    for c in ordered_sources:
-                        _failed_pairs.pop((str(c), rebalance.last_hop_pubkey), None)
-
                 for source_chan in ordered_sources:
-                    # Skip pairs that recently failed
-                    if _is_pair_failed(source_chan, rebalance.last_hop_pubkey):
-                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Source {source_chan} cached as failed for {rebalance.target_alias}, skipping (5min TTL)")
-                        continue
                     # Try to acquire source lock (prevent worker races)
                     if not await _try_acquire_source(source_chan):
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Source {source_chan} locked by another worker, skipping")
@@ -1197,9 +1236,9 @@ async def run_rebalancer(rebalance, worker):
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Used outgoing chan_id: {successful_out}, incoming chan_id: {successful_in}")
                         payment_response = None  # signal success to RapidFire via rebalance.status=2
                         break
-                    else:
-                        # Cache (source, target) failure to avoid retry for 5 min
-                        _mark_pair_failed(source_chan, rebalance.last_hop_pubkey)
+                    # Edge-level failure caching now happens inside try_single_source
+                    # right after each SendToRouteV2 attempt, so we don't blanket-skip
+                    # the whole (source, target) pair here anymore.
 
                 if rebalance.status != 2:
                     # No source succeeded
