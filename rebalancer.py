@@ -44,11 +44,6 @@ _failed_edges = {}
 _FAILED_EDGE_EXPIRY = 600  # 10 minutes
 _FAILED_EDGE_TOLERANCE_PPM = 50_000  # 5% — match regolancer's FailTolerance default
 
-# Active sources: chan_id_str currently locked by a worker
-# Prevents two workers from using the same source channel simultaneously
-_active_sources = set()
-_sources_lock = asyncio.Lock()
-
 # GetChanInfo cache for max_htlc_msat lookups: chan_id -> (monotonic_ts, info)
 _chan_info_cache = {}
 _CHAN_INFO_TTL = 300  # seconds
@@ -136,21 +131,6 @@ def _validate_route(route):
         if diff_ppm <= _FAILED_EDGE_TOLERANCE_PPM:
             return False
     return True
-
-
-async def _try_acquire_source(source_chan_id):
-    """Try to acquire exclusive lock on a source channel. Returns True if acquired."""
-    async with _sources_lock:
-        if str(source_chan_id) in _active_sources:
-            return False
-        _active_sources.add(str(source_chan_id))
-        return True
-
-
-async def _release_source(source_chan_id):
-    """Release lock on a source channel."""
-    async with _sources_lock:
-        _active_sources.discard(str(source_chan_id))
 
 
 # map standard failure codes and internal details to enum names for clearer logs
@@ -1206,20 +1186,15 @@ async def run_rebalancer(rebalance, worker):
                     ordered_sources = [c for c in ordered_sources if str(c) in {str(x) for x in allowed_sources}]
 
                 for source_chan in ordered_sources:
-                    # Try to acquire source lock (prevent worker races)
-                    if not await _try_acquire_source(source_chan):
-                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Source {source_chan} locked by another worker, skipping")
-                        continue
-                    try:
-                        # Reuse the invoice created earlier (failed SendToRouteV2 attempts
-                        # don't settle the invoice, same pattern as saved routes)
-                        result = await try_single_source(
-                            stub, routerstub, rebalance, source_chan, source_fee_map,
-                            target_fee_rate, ar_max_cost, max_fee_rate,
-                            invoice_response, fee_limit_msat, timeout,
-                        )
-                    finally:
-                        await _release_source(source_chan)
+                    # Reuse the invoice created earlier (failed SendToRouteV2 attempts
+                    # don't settle the invoice, same pattern as saved routes). Workers
+                    # can use the same source concurrently — Lightning handles multiple
+                    # in-flight HTLCs per channel; AR-DispatchInterval staggers naturally.
+                    result = await try_single_source(
+                        stub, routerstub, rebalance, source_chan, source_fee_map,
+                        target_fee_rate, ar_max_cost, max_fee_rate,
+                        invoice_response, fee_limit_msat, timeout,
+                    )
 
                     if result is not None:
                         # Success via this source
