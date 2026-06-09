@@ -903,9 +903,8 @@ async def run_rebalancer(rebalance, worker):
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved routes disabled")
             fee_limit_msat = int(rebalance.fee_limit * 1000)
             payment_response = None
-            tried_saved_sources = set()  # chan_ids already attempted via saved routes
+            tried_saved_sources = set()  # chan_ids actually attempted on the wire via saved routes
             for sr in saved_routes:
-                tried_saved_sources.add(str(sr.outgoing_chan_id))
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Trying saved route via {sr.outgoing_chan_id}")
                 rebuilt_hex = None
                 try:
@@ -964,6 +963,10 @@ async def run_rebalancer(rebalance, worker):
 
                     route_msg = build.route
                     rebuilt_hex = route_msg.SerializeToString().hex()
+                    # Only mark the source as tried once we actually hit the wire,
+                    # so per-source iteration is free to try sources we never
+                    # actually attempted via saved routes (e.g. opp-cost rejected).
+                    tried_saved_sources.add(str(sr.outgoing_chan_id))
                     payment_response = await routerstub.SendToRouteV2(
                         lnr.SendToRouteRequest(
                             payment_hash=invoice_response.r_hash,
