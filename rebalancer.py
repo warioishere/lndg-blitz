@@ -1492,6 +1492,7 @@ async def async_queue_manager(rebalancer_queue):
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Queue currently has {rebalancer_queue.qsize()} items...")
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : There are currently {len(active_rebalances)} tasks in progress...")
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Queue manager is checking for more work...")
+            dispatch_interval = await get_dispatch_interval()
             pending_rebalances, rebal_count = await get_pending_rebals()
             if rebal_count > 0:
                 for rebalance in pending_rebalances:
@@ -1499,6 +1500,8 @@ async def async_queue_manager(rebalancer_queue):
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Found a pending job to schedule with id: {rebalance.id}")
                         scheduled_rebalances.append(rebalance.id)
                         await rebalancer_queue.put(rebalance)
+                        if dispatch_interval > 0:
+                            await asyncio.sleep(dispatch_interval)
             await auto_enable()
             scheduled = await auto_schedule()
             if len(scheduled) > 0:
@@ -1506,6 +1509,8 @@ async def async_queue_manager(rebalancer_queue):
                 for rebalance in scheduled:
                     scheduled_rebalances.append(rebalance.id)
                     await rebalancer_queue.put(rebalance)
+                    if dispatch_interval > 0:
+                        await asyncio.sleep(dispatch_interval)
             elif rebalancer_queue.qsize() == 0 and len(active_rebalances) == 0:
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Queue is still empty, stopping the rebalancer...")
                 shutdown_rebalancer = True
@@ -1548,6 +1553,10 @@ async def start_queue(worker_count=1):
 @sync_to_async
 def get_worker_count():
     return get_local_setting('AR-Workers', 1, int)
+
+@sync_to_async
+def get_dispatch_interval():
+    return get_local_setting('AR-DispatchInterval', 5, int)
 
 async def update_worker_count():
     global worker_count, shutdown_rebalancer
