@@ -1059,7 +1059,7 @@ def probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, ma
                     ln.QueryRoutesRequest(
                         pub_key=ch.remote_pubkey,
                         amt=ch.ar_amt_target,
-                        outgoing_chan_id=int(out_chan),
+                        outgoing_chan_ids=[int(out_chan)],
                         fee_limit=ln.FeeLimit(fixed=fee_limit_sat),
                         use_mission_control=True,
                     )

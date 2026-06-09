@@ -209,7 +209,7 @@ async def try_single_source(
             ln.QueryRoutesRequest(
                 pub_key=rebalance.last_hop_pubkey,
                 amt=rebalance.value,
-                outgoing_chan_id=int(source_chan_id),
+                outgoing_chan_ids=[int(source_chan_id)],
                 fee_limit=ln.FeeLimit(fixed=per_source_fee_limit_sat),
                 use_mission_control=True,
             )
