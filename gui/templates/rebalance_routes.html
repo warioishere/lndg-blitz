@@ -124,7 +124,13 @@
 
   <!-- Node Reputation Tab -->
   <div id="Reputation" class="tabcontent" style="display:none">
-    <input class="w3-input w3-border w3-margin-bottom" id="repSearch" type="text" placeholder="Search by alias or pubkey..." oninput="filterReputation()">
+    <div class="w3-row" style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+      <input class="w3-input w3-border" id="repSearch" type="text" placeholder="Search by alias or pubkey..." oninput="filterReputation()" style="flex:1">
+      <form action="{% url 'reset-node-reputation' %}" method="post" onsubmit="return confirm('Delete all node reputation records?');" style="margin:0">
+        {% csrf_token %}
+        <button type="submit" class="w3-button w3-red">Reset Node Reputation</button>
+      </form>
+    </div>
     <table class="w3-table-all w3-centered w3-hoverable">
       <thead>
         <tr>

@@ -1873,6 +1873,14 @@ def trades(request):
         return redirect(request.META.get('HTTP_REFERER'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
+def reset_node_reputation(request):
+    if request.method == 'POST':
+        count = NodeReputation.objects.count()
+        NodeReputation.objects.all().delete()
+        messages.success(request, f'Cleared {count} node reputation record{"s" if count != 1 else ""}.')
+    return redirect(request.META.get('HTTP_REFERER') or '/rebalanceroutes')
+
+@is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def reset(request):
     if request.method == 'GET':
         context = {

@@ -89,6 +89,7 @@ urlpatterns = [
     path('logs/', views.logs, name='logs'),
     path('addresses/', views.addresses, name='addresses'),
     path('reset/', views.reset, name='reset'),
+    path('reset_node_reputation/', views.reset_node_reputation, name='reset-node-reputation'),
     path('api/', include(router.urls), name='api-root'),
     path('api-auth/', include('rest_framework.urls'), name='api-auth'),
     path('api/connectpeer/', views.connect_peer, name='connect-peer'),
