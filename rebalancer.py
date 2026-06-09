@@ -48,6 +48,16 @@ _FAILED_EDGE_TOLERANCE_PPM = 50_000  # 5% — match regolancer's FailTolerance d
 _chan_info_cache = {}
 _CHAN_INFO_TTL = 300  # seconds
 
+# Cached identity pubkey, lazily fetched on first use.
+_self_pubkey = None
+
+
+def _get_self_pubkey(stub):
+    global _self_pubkey
+    if _self_pubkey is None:
+        _self_pubkey = stub.GetInfo(ln.GetInfoRequest()).identity_pubkey
+    return _self_pubkey
+
 
 def _max_amount_on_route_msat(stub, route):
     """Walk the route and return the smallest max_htlc_msat across hops, or 0 on error.
@@ -254,14 +264,17 @@ async def try_single_source(
     if per_source_fee_limit_sat <= 0:
         return None
 
-    # QueryRoutes: LND finds the cheapest route from us through this source to target
-    # (respects inbound fee discounts natively via UseMissionControl)
+    # QueryRoutes for a self-payment rebalance: destination is US, last hop is
+    # the target peer (matches regolancer routes.go:102-110). LND then constructs
+    # the loop-back via the AR-target channel so the route actually ends at us.
+    self_pubkey = await sync_to_async(_get_self_pubkey)(stub)
     try:
         qr_response = await sync_to_async(stub.QueryRoutes)(
             ln.QueryRoutesRequest(
-                pub_key=rebalance.last_hop_pubkey,
+                pub_key=self_pubkey,
                 amt=rebalance.value,
                 outgoing_chan_ids=[int(source_chan_id)],
+                last_hop_pubkey=bytes.fromhex(rebalance.last_hop_pubkey),
                 fee_limit=ln.FeeLimit(fixed=per_source_fee_limit_sat),
                 use_mission_control=True,
             )

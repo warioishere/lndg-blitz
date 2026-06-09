@@ -1126,8 +1126,12 @@ def _probe_with_binary_search(routerstub, source_chan_id, hop_pubkeys, cltv_delt
     return best_hex, good, best_fee_ppm
 
 
-def probe_targets(stub, routerstub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target):
+def probe_targets(stub, routerstub, self_pubkey, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target):
     """Probe AR targets with random-preimage HTLCs and store only verified routes.
+
+    Self-payment routing: QueryRoutes is told the destination is us and the
+    last hop must be the target peer (matches regolancer routes.go:102-110), so
+    the route actually ends at us via the AR-target channel.
 
     Returns (total_new, total_existing, total_errors, target_details).
     """
@@ -1156,9 +1160,10 @@ def probe_targets(stub, routerstub, targets, outbound_cans, source_fee_map, max_
             try:
                 response = stub.QueryRoutes(
                     ln.QueryRoutesRequest(
-                        pub_key=ch.remote_pubkey,
+                        pub_key=self_pubkey,
                         amt=ch.ar_amt_target,
                         outgoing_chan_ids=[int(out_chan)],
+                        last_hop_pubkey=bytes.fromhex(ch.remote_pubkey),
                         fee_limit=ln.FeeLimit(fixed=fee_limit_sat),
                         use_mission_control=True,
                     )
@@ -1257,8 +1262,9 @@ def probe_routes_job(stub):
     )
     max_fee_rate = int(LocalSettings.objects.filter(key='AR-MaxFeeRate').values_list('value', flat=True).first() or 500)
     routerstub = lnrouter.RouterStub(get_shared_channel())
+    self_pubkey = stub.GetInfo(ln.GetInfoRequest()).identity_pubkey
     total_new, total_existing, total_errors, target_details = probe_targets(
-        stub, routerstub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target
+        stub, routerstub, self_pubkey, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target
     )
     duration_ms = int((_time.monotonic() - probe_start) * 1000)
     LocalSettings.objects.update_or_create(key='QR-LastProbe', defaults={'value': datetime.now().isoformat()})
