@@ -263,8 +263,7 @@ async def try_single_source(
     per_source_fee_limit_sat = int(per_source_route_ppm * rebalance.value / 1_000_000)
     if per_source_fee_limit_sat <= 0:
         return None
-    src_alias = await sync_to_async(lambda: Channels.objects.filter(chan_id=str(source_chan_id)).values_list('alias', flat=True).first())() or "?"
-    src_label = f"{source_chan_id} ({src_alias})"
+    src_label = _chan_label(source_chan_id)
 
     # QueryRoutes for a self-payment rebalance: destination is US, last hop is
     # the target peer (matches regolancer routes.go:102-110). LND then constructs
@@ -458,9 +457,7 @@ def get_out_cans(rebalance, auto_rebalance_channels):
             .values_list('chan_id', flat=True)
         )
         if len(result) > 1:
-            alias_lookup = dict(Channels.objects.filter(chan_id__in=[str(c) for c in result]).values_list('chan_id', 'alias'))
-            labeled = [f"{c} ({alias_lookup.get(str(c)) or '?'})" for c in result]
-            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : get_out_cans: Found {len(result)} candidate channels (ordered by DB htlc_count): {labeled}")
+            print(f"{datetime.now().strftime('%c')} : [Rebalancer] : get_out_cans: Found {len(result)} candidate channels (ordered by DB htlc_count): {[_chan_label(c) for c in result]}")
         return result
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error getting outbound cands: {str(e)}")
@@ -511,18 +508,29 @@ def get_source_diff_map(chan_ids):
         .values_list('chan_id', 'ar_source_ppm_diff')
     )
 
-@sync_to_async
-def get_source_alias_map(chan_ids):
-    """Build a map of chan_id -> alias for log readability."""
-    return dict(
-        Channels.objects.filter(chan_id__in=[str(c) for c in chan_ids])
-        .values_list('chan_id', 'alias')
-    )
+# Module-level chan_id -> alias cache, bulk-refreshed every 5 min from the
+# Channels table. Aliases rarely change and a single bulk query is cheaper
+# than N per-call lookups; all log-formatting helpers below are pure dict
+# reads after the first warm.
+_alias_cache = {}
+_alias_cache_loaded_at = 0
+_ALIAS_CACHE_TTL = 300
 
-def _label(cid, alias_map):
-    """Format a chan_id as 'chan_id (alias)' for logs; falls back to plain chan_id."""
-    alias = alias_map.get(str(cid)) or alias_map.get(cid)
-    return f"{cid} ({alias})" if alias else str(cid)
+def _refresh_alias_cache():
+    global _alias_cache, _alias_cache_loaded_at
+    _alias_cache = dict(Channels.objects.values_list('chan_id', 'alias'))
+    _alias_cache_loaded_at = monotonic()
+
+@sync_to_async
+def _ensure_alias_cache_async():
+    if not _alias_cache or monotonic() - _alias_cache_loaded_at > _ALIAS_CACHE_TTL:
+        _refresh_alias_cache()
+
+def _chan_alias(cid):
+    return _alias_cache.get(str(cid), "?")
+
+def _chan_label(cid):
+    return f"{cid} ({_chan_alias(cid)})"
 
 @sync_to_async
 def get_target_info(last_hop_pubkey):
@@ -858,9 +866,6 @@ def sort_channels_by_htlc(stub, chan_ids):
 
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Checking {len(chan_ids)} channels from DB")
 
-        # Pre-fetch aliases for log readability
-        alias_map = dict(Channels.objects.filter(chan_id__in=[str(c) for c in chan_ids]).values_list('chan_id', 'alias'))
-
         # Get current channel state from LND
         channels = stub.ListChannels(ln.ListChannelsRequest(active_only=False)).channels
 
@@ -873,8 +878,7 @@ def sort_channels_by_htlc(stub, chan_ids):
                     'htlc_count': htlc_count,
                     'remote_pubkey': c.remote_pubkey
                 }
-                alias = alias_map.get(str(c.chan_id)) or "?"
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Chan {c.chan_id} ({alias}) has {htlc_count} pending HTLCs")
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Chan {_chan_label(c.chan_id)} has {htlc_count} pending HTLCs")
 
         # Group channels by peer
         peer_channels = {}  # remote_pubkey -> [(chan_id, htlc_count), ...]
@@ -895,18 +899,15 @@ def sort_channels_by_htlc(stub, chan_ids):
                 sorted_peer_chans = sorted(peer_chan_list, key=lambda x: x[1])
                 selected = sorted_peer_chans[0]
                 filtered_ids.append(selected[0])
-                peer_alias = alias_map.get(str(selected[0])) or "?"
-                sel_label = f"{selected[0]} ({peer_alias})"
-                excl_labels = [f"{c[0]} ({alias_map.get(str(c[0])) or '?'}; {c[1]} HTLCs)" for c in sorted_peer_chans[1:]]
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Peer {peer_alias} has {len(peer_chan_list)} channels - selected {sel_label} with {selected[1]} HTLCs, excluded: {excl_labels}")
+                peer_alias = _chan_alias(selected[0])
+                excl_labels = [f"{_chan_label(c[0])} ({c[1]} HTLCs)" for c in sorted_peer_chans[1:]]
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Peer {peer_alias} has {len(peer_chan_list)} channels - selected {_chan_label(selected[0])} with {selected[1]} HTLCs, excluded: {excl_labels}")
             else:
                 # Single channel to this peer - include it
                 filtered_ids.append(peer_chan_list[0][0])
 
-        orig_labels = [f"{c} ({alias_map.get(str(c)) or '?'})" for c in chan_ids]
-        filt_labels = [f"{c} ({alias_map.get(str(c)) or '?'})" for c in filtered_ids]
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Original list: {orig_labels}")
-        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Filtered list: {filt_labels} (removed {len(chan_ids) - len(filtered_ids)} channels)")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Original list: {[_chan_label(c) for c in chan_ids]}")
+        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : HTLC Filter: Filtered list: {[_chan_label(c) for c in filtered_ids]} (removed {len(chan_ids) - len(filtered_ids)} channels)")
 
         return filtered_ids
     except Exception as e:
@@ -945,10 +946,10 @@ async def run_rebalancer(rebalance, worker):
             # Wrapped in sync_to_async because sort_channels_by_htlc now also does ORM lookups for aliases.
             chan_ids = await sync_to_async(sort_channels_by_htlc)(stub, chan_ids)
 
+            await _ensure_alias_cache_async()
             # Load opportunity cost data for this rebalance
             source_fee_map = await get_source_fee_map(chan_ids)
             source_diff_map = await get_source_diff_map(chan_ids)
-            source_alias_map = await get_source_alias_map(chan_ids)
             target_fee_rate, ar_max_cost = await get_target_info(rebalance.last_hop_pubkey)
             max_fee_rate = await get_max_fee_rate()
             opp_cost_enabled = target_fee_rate is not None and ar_max_cost is not None
@@ -963,13 +964,13 @@ async def run_rebalancer(rebalance, worker):
                     src_fee = source_fee_map.get(str(cid), source_fee_map.get(cid, 0))
                     src_diff = source_diff_map.get(str(cid), source_diff_map.get(cid, 0)) or 0
                     if target_fee_rate < src_fee + src_diff:
-                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {_label(cid, source_alias_map)} (target fee {target_fee_rate} < source {src_fee} + ppm_diff {src_diff} for {rebalance.target_alias})")
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {_chan_label(cid)} (target fee {target_fee_rate} < source {src_fee} + ppm_diff {src_diff} for {rebalance.target_alias})")
                         continue
                     max_route_ppm = int(target_fee_rate * (ar_max_cost / 100)) - src_fee
                     if max_route_ppm > 0:
                         filtered_ids.append(cid)
                     else:
-                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {_label(cid, source_alias_map)} (outbound fee {src_fee} ppm eats entire budget for target {rebalance.target_alias})")
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Excluding source {_chan_label(cid)} (outbound fee {src_fee} ppm eats entire budget for target {rebalance.target_alias})")
                 chan_ids = filtered_ids
                 if len(chan_ids) < original_count:
                     print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Opportunity cost filter: {original_count} -> {len(chan_ids)} outbound channels")
@@ -1004,9 +1005,8 @@ async def run_rebalancer(rebalance, worker):
             fee_limit_msat = int(rebalance.fee_limit * 1000)
             payment_response = None
             tried_saved_sources = set()  # chan_ids actually attempted on the wire via saved routes
-            saved_alias_map = await get_source_alias_map([sr.outgoing_chan_id for sr in saved_routes]) if saved_routes else {}
             for sr in saved_routes:
-                sr_label = _label(sr.outgoing_chan_id, saved_alias_map)
+                sr_label = _chan_label(sr.outgoing_chan_id)
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Trying saved route via {sr_label}")
                 rebuilt_hex = None
                 try:
@@ -1250,7 +1250,7 @@ async def run_rebalancer(rebalance, worker):
                             rebalance.value = result['value']
                         successful_out = result['successful_out']
                         successful_in = result['successful_in']
-                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Per-source succeeded via {_label(source_chan, source_alias_map)} - hash: {rebalance.payment_hash}")
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Per-source succeeded via {_chan_label(source_chan)} - hash: {rebalance.payment_hash}")
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Used outgoing chan_id: {successful_out}, incoming chan_id: {successful_in}")
                         payment_response = None  # signal success to RapidFire via rebalance.status=2
                         break
@@ -1508,8 +1508,9 @@ def auto_schedule() -> List[Rebalancer]:
                 new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str([source_id]), last_hop_pubkey=pub, target_alias=target.alias, duration=target_time)
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Creating Auto Rebalance Request for allowed target {pub} via {source_id}")
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Value: {target_value} / {target.ar_amt_target} | Fee: {target_fee} | Duration: {target_time}")
-                src_alias = Channels.objects.filter(chan_id=str(source_id)).values_list('alias', flat=True).first() or "?"
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: [{source_id} ({src_alias})]")
+                if not _alias_cache or monotonic() - _alias_cache_loaded_at > _ALIAS_CACHE_TTL:
+                    _refresh_alias_cache()
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: [{_chan_label(source_id)}]")
                 new_rebalance.save()
                 to_schedule.append(new_rebalance)
                 scheduled_targets.add(pub)
@@ -1532,9 +1533,9 @@ def auto_schedule() -> List[Rebalancer]:
                         continue
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Creating Auto Rebalance Request for: {target.chan_id}")
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Value: {target_value} / {target.ar_amt_target} | Fee: {target_fee} | Duration: {target_time}")
-                out_alias_map = dict(Channels.objects.filter(chan_id__in=[str(c) for c in outbound_cans]).values_list('chan_id', 'alias'))
-                out_labels = [f"{c} ({out_alias_map.get(str(c)) or '?'})" for c in outbound_cans]
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: {out_labels}")
+                if not _alias_cache or monotonic() - _alias_cache_loaded_at > _ALIAS_CACHE_TTL:
+                    _refresh_alias_cache()
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: {[_chan_label(c) for c in outbound_cans]}")
                 new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str(outbound_cans).replace('\'', ''), last_hop_pubkey=target.remote_pubkey, target_alias=target.alias, duration=target_time)
                 new_rebalance.save()
                 to_schedule.append(new_rebalance)
