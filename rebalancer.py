@@ -1165,6 +1165,7 @@ async def run_rebalancer(rebalance, worker):
                 for source_chan in ordered_sources:
                     # Skip pairs that recently failed
                     if _is_pair_failed(source_chan, rebalance.last_hop_pubkey):
+                        print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Source {source_chan} cached as failed for {rebalance.target_alias}, skipping (5min TTL)")
                         continue
                     # Try to acquire source lock (prevent worker races)
                     if not await _try_acquire_source(source_chan):
