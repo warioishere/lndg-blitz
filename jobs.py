@@ -5,9 +5,12 @@ from django.db.models.functions import TruncDay
 from datetime import datetime, timedelta
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
+from gui.lnd_deps import router_pb2 as lnr
+from gui.lnd_deps import router_pb2_grpc as lnrouter
 from gui.lnd_deps import signer_pb2 as lns
 from gui.lnd_deps import signer_pb2_grpc as lnsigner
 from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
+import os as _os
 from lndg import settings
 from os import environ
 from requests import get
@@ -1029,8 +1032,105 @@ def agg_failed_htlcs():
     agg_htlcs(FailedHTLCs.objects.filter(timestamp__lte=time_filter, failure_detail=99)[:100], 'downstream')
     agg_htlcs(FailedHTLCs.objects.filter(timestamp__lte=time_filter).exclude(failure_detail__in=[6, 99])[:100], 'other')
 
-def probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target):
-    """Probe a queryset of AR target channels and return (total_new, total_existing, total_errors, target_details)."""
+def _probe_route_sync(routerstub, route_msg, timeout_sec=30):
+    """Send a probe HTLC with a random preimage.
+
+    Returns one of:
+      ('verified', code, fsi) — recipient rejected with INCORRECT_OR_UNKNOWN_PAYMENT_DETAILS,
+                                i.e. the path itself is durable at this amount.
+      ('liquidity', code, fsi) — TEMPORARY_CHANNEL_FAILURE somewhere; this amount won't go through.
+      ('fee', code, fsi)       — FEE_INSUFFICIENT; retry with adjusted fee.
+      ('invalid', code, fsi)   — any other failure; the route is structurally broken.
+      ('error', None, None)    — gRPC error or unexpected status.
+    """
+    fake_hash = _os.urandom(32)
+    try:
+        result = routerstub.SendToRouteV2(
+            lnr.SendToRouteRequest(payment_hash=fake_hash, route=route_msg),
+            timeout=timeout_sec,
+        )
+    except Exception:
+        return 'error', None, None
+    if result.status == 1:
+        # Should never happen — fake hash cannot be the preimage of a real invoice
+        return 'error', None, None
+    failure = result.failure
+    code = getattr(failure, 'code', None)
+    fsi = getattr(failure, 'failure_source_index', None)
+    n_hops = len(route_msg.hops)
+    if code == 1 and fsi == n_hops:
+        return 'verified', code, fsi
+    if code == 15:
+        return 'liquidity', code, fsi
+    if code == 12:
+        return 'fee', code, fsi
+    return 'invalid', code, fsi
+
+
+def _probe_with_binary_search(routerstub, source_chan_id, hop_pubkeys, cltv_delta,
+                              target_amount_sat, fee_limit_sat, max_steps=8):
+    """Binary-search the max amount that flows through (source_chan_id, hop_pubkeys).
+
+    Returns (verified_route_hex, max_amount_sat, fee_ppm) or (None, 0, None) if no amount works.
+    Starts at target_amount_sat, halves on TEMPORARY_CHANNEL_FAILURE, raises on verified.
+    Stops when remaining gap <= max(good // 20, 1000) sats, or after max_steps probes.
+    """
+    good = 0
+    bad = target_amount_sat + 1
+    amount = target_amount_sat
+    best_hex = None
+    best_fee_ppm = None
+    for _step in range(max_steps):
+        if amount <= 0:
+            break
+        try:
+            built = routerstub.BuildRoute(lnr.BuildRouteRequest(
+                outgoing_chan_id=int(source_chan_id),
+                amt_msat=amount * 1000,
+                hop_pubkeys=hop_pubkeys,
+                final_cltv_delta=cltv_delta,
+            ), timeout=15)
+        except Exception:
+            break
+        route_msg = built.route
+        if not route_msg.hops:
+            break
+        # Scale fee budget proportional to amount; if the route is too expensive
+        # at this amount, halving won't help (base fees are constant), so abort.
+        amount_fee_limit_sat = max(1, int(fee_limit_sat * amount / target_amount_sat))
+        if route_msg.total_fees_msat // 1000 > amount_fee_limit_sat:
+            break
+        route_fee_ppm = None
+        if route_msg.total_amt_msat and route_msg.total_fees_msat and route_msg.total_amt_msat > route_msg.total_fees_msat:
+            route_fee_ppm = (route_msg.total_fees_msat / (route_msg.total_amt_msat - route_msg.total_fees_msat)) * 1000000
+        status, code, fsi = _probe_route_sync(routerstub, route_msg)
+        if status == 'verified':
+            best_hex = route_msg.SerializeToString().hex()
+            best_fee_ppm = route_fee_ppm
+            good = amount
+            if bad - good <= max(good // 20, 1000):
+                break
+            amount = (good + bad) // 2
+        elif status == 'liquidity':
+            bad = amount
+            if bad - good <= max(good // 20, 1000):
+                break
+            amount = (good + bad) // 2
+        elif status == 'fee':
+            # Retry same amount once; if it persists, abort to avoid loops
+            if _step >= max_steps - 1:
+                break
+            continue
+        else:
+            break
+    return best_hex, good, best_fee_ppm
+
+
+def probe_targets(stub, routerstub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target):
+    """Probe AR targets with random-preimage HTLCs and store only verified routes.
+
+    Returns (total_new, total_existing, total_errors, target_details).
+    """
     probe_buffer_ppm = 100
     probed_pubkeys = set()
     total_new = 0
@@ -1044,11 +1144,10 @@ def probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, ma
         target_new = 0
         target_existing = 0
         target_errors = 0
-        # Get outbound channels excluding channels to same peer
+        target_verified = 0
         out_chans = [c for c in outbound_cans if c not in
                      set(Channels.objects.filter(remote_pubkey=ch.remote_pubkey).values_list('chan_id', flat=True))]
         for out_chan in out_chans[:max_per_target]:
-            # Compute spread-based budget + buffer for this (target, source) pair
             source_fee_rate = source_fee_map.get(out_chan, 0)
             budget_ppm = min(max_fee_rate, int(ch.local_fee_rate * (ch.ar_max_cost / 100)) - source_fee_rate)
             fee_limit_sat = int((budget_ppm + probe_buffer_ppm) * ch.ar_amt_target / 1000000)
@@ -1064,38 +1163,42 @@ def probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, ma
                         use_mission_control=True,
                     )
                 )
-            except Exception as e:
+            except Exception:
                 target_errors += 1
                 continue
             if not response or not response.routes:
                 continue
-            for route in response.routes:
-                if not route.hops:
-                    continue
-                path = "-".join(h.pub_key for h in route.hops)
-                route_out_chan = str(route.hops[0].chan_id)
-                route_hex = route.SerializeToString().hex()
-                if len(route.hops) >= 2:
-                    cltv = route.hops[-1].expiry - route.hops[-2].expiry
-                else:
-                    cltv = 144
-                # Calculate fee ppm from route data
-                fee_ppm = None
-                if route.total_amt_msat and route.total_fees_msat:
-                    fee_ppm = (route.total_fees_msat / (route.total_amt_msat - route.total_fees_msat)) * 1000000
-                obj, created = RebalanceRoute.objects.get_or_create(
-                    target_pubkey=ch.remote_pubkey,
-                    outgoing_chan_id=route_out_chan,
-                    route=path,
-                    defaults={"final_cltv_delta": cltv, "route_hex": route_hex, "last_fee_ppm": fee_ppm},
-                )
-                if not created and fee_ppm is not None:
-                    obj.last_fee_ppm = fee_ppm
-                    obj.save(update_fields=['last_fee_ppm'])
-                if created:
-                    target_new += 1
-                else:
-                    target_existing += 1
+            # Probe the first candidate path returned by QueryRoutes. We use
+            # BuildRoute to re-shape the path to varying amounts during binary search.
+            route = response.routes[0]
+            if not route.hops:
+                continue
+            hop_pubkeys = [bytes.fromhex(h.pub_key) for h in route.hops]
+            cltv = route.hops[-1].expiry - route.hops[-2].expiry if len(route.hops) >= 2 else 144
+            verified_hex, max_amount_sat, verified_fee_ppm = _probe_with_binary_search(
+                routerstub, out_chan, hop_pubkeys, cltv,
+                ch.ar_amt_target, fee_limit_sat,
+            )
+            if verified_hex is None or max_amount_sat <= 0:
+                target_errors += 1
+                continue
+            path = "-".join(h.pub_key for h in route.hops)
+            route_out_chan = str(route.hops[0].chan_id)
+            obj, created = RebalanceRoute.objects.get_or_create(
+                target_pubkey=ch.remote_pubkey,
+                outgoing_chan_id=route_out_chan,
+                route=path,
+                defaults={"final_cltv_delta": cltv, "route_hex": verified_hex, "last_fee_ppm": verified_fee_ppm},
+            )
+            if not created:
+                obj.route_hex = verified_hex
+                if verified_fee_ppm is not None:
+                    obj.last_fee_ppm = verified_fee_ppm
+                obj.save(update_fields=['route_hex', 'last_fee_ppm'])
+                target_existing += 1
+            else:
+                target_new += 1
+            target_verified += 1
         total_new += target_new
         total_existing += target_existing
         total_errors += target_errors
@@ -1106,6 +1209,7 @@ def probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, ma
             'new': target_new,
             'existing': target_existing,
             'errors': target_errors,
+            'verified': target_verified,
             'out_chans_tried': min(len(out_chans), max_per_target),
         })
     return total_new, total_existing, total_errors, target_details
@@ -1152,8 +1256,9 @@ def probe_routes_job(stub):
         .values_list('chan_id', 'local_fee_rate')
     )
     max_fee_rate = int(LocalSettings.objects.filter(key='AR-MaxFeeRate').values_list('value', flat=True).first() or 500)
+    routerstub = lnrouter.RouterStub(get_shared_channel())
     total_new, total_existing, total_errors, target_details = probe_targets(
-        stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target
+        stub, routerstub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target
     )
     duration_ms = int((_time.monotonic() - probe_start) * 1000)
     LocalSettings.objects.update_or_create(key='QR-LastProbe', defaults={'value': datetime.now().isoformat()})
