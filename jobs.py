@@ -714,6 +714,18 @@ def auto_fees(stub):
             if not update_df.empty:
                 for target_channel in update_df.to_dict(orient='records'):
                     channel = Channels.objects.filter(chan_id=target_channel['chan_id'])[0]
+                    # If the user manually changed the outbound or inbound fee on this channel
+                    # AFTER af.main() snapshotted it (i.e. the fresh DB row diverges from the
+                    # value af.main() based its computation on), respect the user and skip — do
+                    # not clobber a manual edit with a rate computed from stale data.
+                    snapshot_fee = target_channel.get('local_fee_rate')
+                    snapshot_inbound = target_channel.get('local_inbound_fee_rate')
+                    if snapshot_fee is not None and channel.local_fee_rate != snapshot_fee:
+                        print(f"{datetime.now().strftime('%c')} : [Data] : Auto-fees skip outbound update on {channel.chan_id} ({channel.alias}): manual change detected ({snapshot_fee} -> {channel.local_fee_rate})")
+                        continue
+                    if snapshot_inbound is not None and channel.local_inbound_fee_rate != snapshot_inbound:
+                        print(f"{datetime.now().strftime('%c')} : [Data] : Auto-fees skip update on {channel.chan_id} ({channel.alias}): manual inbound change detected ({snapshot_inbound} -> {channel.local_inbound_fee_rate})")
+                        continue
                     channel_point = ln.ChannelPoint()
                     channel_point.funding_txid_bytes = bytes.fromhex(channel.funding_txid)
                     channel_point.funding_txid_str = channel.funding_txid
