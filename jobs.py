@@ -26,15 +26,22 @@ CHANNEL_UPDATE_FIELDS = [
     'local_balance', 'remote_balance', 'unsettled_balance', 'local_commit',
     'local_chan_reserve', 'num_updates', 'initiator', 'alias', 'total_sent',
     'total_received', 'private', 'pending_outbound', 'pending_inbound',
-    'htlc_count', 'local_base_fee', 'local_fee_rate', 'local_inbound_base_fee',
-    'local_inbound_fee_rate', 'inbound_offset', 'offset_updated', 'local_disabled',
+    'htlc_count', 'local_base_fee', 'local_inbound_base_fee',
+    'inbound_offset', 'local_disabled',
     'local_cltv', 'local_min_htlc_msat', 'local_max_htlc_msat', 'remote_base_fee',
     'remote_fee_rate', 'remote_inbound_base_fee', 'remote_inbound_fee_rate',
     'remote_disabled', 'remote_cltv', 'remote_min_htlc_msat',
     'remote_max_htlc_msat', 'push_amt', 'close_address', 'is_active', 'is_open',
     'last_update', 'auto_rebalance', 'ar_amt_target', 'ar_in_target',
     'ar_out_target', 'ar_max_cost', 'ar_source', 'ar_source_ppm_diff',
-    'fees_updated', 'auto_fees', 'notes'
+    'auto_fees', 'notes'
+    # Intentionally NOT in this list (these are owned by UI/AF code paths and
+    # would be clobbered by the bulk_update's stale in-memory snapshot if
+    # included here):
+    #   local_fee_rate          -- UI / auto_fees / jobs that explicitly push
+    #   local_inbound_fee_rate  -- UI / inbound_offsets
+    #   offset_updated          -- inbound_offsets job
+    #   fees_updated            -- UI / auto_fees / jobs that explicitly push
 ]
 
 
