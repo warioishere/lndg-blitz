@@ -769,6 +769,9 @@ def inbound_offsets(stub):
     if curve_mode and af_inbound:
         channels = channels.filter(auto_fees=False)
     for ch in channels:
+        # Re-read from DB right before the LND RPC so a concurrent UI fee change
+        # isn't shadowed by the stale snapshot we got from the initial queryset.
+        ch.refresh_from_db()
         if not ch.offset_updated or ch.offset_updated < threshold:
             balance = ch.local_fee_rate + ch.inbound_offset
             target = -balance if balance > 0 else 0
@@ -792,9 +795,12 @@ def inbound_offsets(stub):
                 continue
             if ch.local_inbound_fee_rate != target:
                 InboundFeeLog(chan_id=ch.chan_id, peer_alias=ch.alias, setting='Offset Job', old_value=ch.local_inbound_fee_rate, new_value=target).save()
-            ch.local_inbound_fee_rate = target
-            ch.offset_updated = datetime.now()
-            ch.save()
+            # Targeted UPDATE so we never write back the rest of the stale row
+            # (most importantly local_fee_rate that the UI may just have changed).
+            Channels.objects.filter(pk=ch.pk).update(
+                local_inbound_fee_rate=target,
+                offset_updated=datetime.now(),
+            )
 
 def auto_maxhtlc_job(stub):
     if LocalSettings.objects.filter(key='MX-Enabled').exists():
@@ -829,6 +835,8 @@ def auto_maxhtlc_job(stub):
         if expected_msat is None:
             continue
         if (ch.local_max_htlc_msat != expected_msat) or not ch.maxhtlc_updated or ch.maxhtlc_updated < threshold:
+            # Refresh so a concurrent UI fee change isn't shadowed by the stale queryset snapshot.
+            ch.refresh_from_db()
             channel_point = ln.ChannelPoint()
             channel_point.funding_txid_bytes = bytes.fromhex(ch.funding_txid)
             channel_point.funding_txid_str = ch.funding_txid
@@ -846,9 +854,11 @@ def auto_maxhtlc_job(stub):
             except Exception as e:
                 print(f"{datetime.now().strftime('%c')} : [Data] : Error updating max htlc for {ch.chan_id}: {str(e)}")
                 continue
-            ch.local_max_htlc_msat = expected_msat
-            ch.maxhtlc_updated = datetime.now()
-            ch.save()
+            # Targeted UPDATE so we don't overwrite local_fee_rate that the UI may have just changed.
+            Channels.objects.filter(pk=ch.pk).update(
+                local_max_htlc_msat=expected_msat,
+                maxhtlc_updated=datetime.now(),
+            )
 
 def emergency_fee_job(stub):
     if LocalSettings.objects.filter(key='EP-Enabled').exists():
