@@ -67,6 +67,8 @@ def main():
             print(f"{datetime.now().strftime('%c')} : [HTLC] : Error while running failed HTLC stream: {str(e)}")
         finally:
             close_shared_channel()
+            # Drop broken Django DB connections too so the next ORM call reconnects.
+            django.db.close_old_connections()
             sleep(20)
 
 if __name__ == '__main__':

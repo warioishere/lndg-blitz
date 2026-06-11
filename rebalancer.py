@@ -1722,6 +1722,10 @@ def main():
                     unknown_error.save()
             loop.run_until_complete(start_queue(worker_count))
             print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Rebalancer successfully exited...sleeping for 20 seconds")
+            # Drop broken Django DB connections so the next queue manager / worker
+            # reconnects rather than re-using a 'connection already closed' handle.
+            import django.db as _django_db
+            _django_db.close_old_connections()
             sleep(20)
     except Exception as e:
         error = str(e)

@@ -392,6 +392,8 @@ def main():
             print(f"{datetime.now().strftime('%c')} : [GraphWatcher] : Error: {e}")
         finally:
             close_shared_channel()
+            # Drop broken Django DB connections so the next ORM call reconnects.
+            django.db.close_old_connections()
             sleep(20)
 
 

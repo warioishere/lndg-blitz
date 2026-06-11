@@ -1342,6 +1342,10 @@ def main():
             print(f"{datetime.now().strftime('%c')} : [Data] : Error processing background data: {str(e)}")
             close_shared_channel()
             channel = get_shared_channel()
+            # Drop any broken Django DB connections so the next ORM call opens a fresh one.
+            # 'connection already closed' from Postgres has the same shape as a gRPC error
+            # but Django keeps re-using the dead handle until we explicitly close it.
+            django.db.close_old_connections()
         print(f"{datetime.now().strftime('%c')} : [Data] : Data execution completed...sleeping for 20 seconds")
         sleep(20)
 

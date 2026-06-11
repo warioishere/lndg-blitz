@@ -43,7 +43,9 @@ def main():
         finally:
             if 'p2p_thread' in locals() and p2p_thread.is_alive():
                 print(f"{datetime.now().strftime('%c')} : [P2P] : Removing any remaining processes...")
-                p2p_thread.terminate()       
+                p2p_thread.terminate()
+            # Drop broken Django DB connections so the next ORM call reconnects.
+            django.db.close_old_connections()
             sleep(20)
 
 if __name__ == '__main__':
