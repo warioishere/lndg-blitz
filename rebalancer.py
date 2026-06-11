@@ -1482,6 +1482,13 @@ def auto_schedule() -> List[Rebalancer]:
         if len(inbound_cans) == 0 or len(outbound_cans) == 0:
             return []
 
+        # Map chan_id -> remote_pubkey so we can filter out channels to the same
+        # peer as a given target (i.e. don't let a channel be its own source).
+        chan_to_peer = dict(
+            Channels.objects.filter(chan_id__in=[str(c) for c in outbound_cans])
+            .values_list('chan_id', 'remote_pubkey')
+        )
+
         max_fee_rate = get_local_setting('AR-MaxFeeRate', 500, int)
         variance = get_local_setting('AR-Variance', 0, int)
         wait_period = get_local_setting('AR-WaitPeriod', 30, int)
@@ -1552,8 +1559,14 @@ def auto_schedule() -> List[Rebalancer]:
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Value: {target_value} / {target.ar_amt_target} | Fee: {target_fee} | Duration: {target_time}")
                 if not _alias_cache or monotonic() - _alias_cache_loaded_at > _ALIAS_CACHE_TTL:
                     _refresh_alias_cache()
-                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: {[_chan_label(c) for c in outbound_cans]}")
-                new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str(outbound_cans).replace('\'', ''), last_hop_pubkey=target.remote_pubkey, target_alias=target.alias, duration=target_time)
+                # Exclude any source whose peer is the rebalance target's peer — that's the
+                # channel itself (or a sibling to the same peer). LND can't sensibly route a
+                # circular payment where the same peer is both first and last hop.
+                target_outbound_cans = [c for c in outbound_cans if chan_to_peer.get(str(c)) != target.remote_pubkey]
+                if not target_outbound_cans:
+                    continue
+                print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Request routing outbound via: {[_chan_label(c) for c in target_outbound_cans]}")
+                new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str(target_outbound_cans).replace('\'', ''), last_hop_pubkey=target.remote_pubkey, target_alias=target.alias, duration=target_time)
                 new_rebalance.save()
                 to_schedule.append(new_rebalance)
         return to_schedule
