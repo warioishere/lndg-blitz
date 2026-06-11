@@ -448,6 +448,7 @@ def get_out_cans(rebalance, auto_rebalance_channels):
         result = list(
             auto_rebalance_channels
             .filter(percent_outbound__gte=F('ar_out_target'))
+            .filter(local_disabled=False)  # we wouldn't forward via this channel ourselves
             .filter(
                 Q(ar_source=True)        # explicitly enabled as source in Advanced Rebalancing
                 | Q(auto_rebalance=False) # non-AR-managed channels are free to drain
@@ -1341,7 +1342,7 @@ async def run_rebalancer(rebalance, worker):
                 #Reduce potential rebalance value in percent out to avoid going below AR-OUT-Target,
                 # subtracting local_chan_reserve (sats we cant actually spend).
                 auto_rebalance_channels = Channels.objects.filter(is_active=True, is_open=True, private=False).annotate(percent_outbound=((Sum('local_balance')+Sum('pending_outbound')-Sum('local_chan_reserve')-rebalance.value*inc)*100)/Sum('capacity')).annotate(inbound_can=(((Sum('remote_balance')+Sum('pending_inbound'))*100)/Sum('capacity'))/Sum('ar_in_target'))
-                inbound_cans = auto_rebalance_channels.filter(remote_pubkey=rebalance.last_hop_pubkey).filter(auto_rebalance=True, inbound_can__gte=1)
+                inbound_cans = auto_rebalance_channels.filter(remote_pubkey=rebalance.last_hop_pubkey).filter(auto_rebalance=True, inbound_can__gte=1, remote_disabled=False)
                 outbound_cans = await get_out_cans(rebalance, auto_rebalance_channels)
                 # Cap RapidFire so the next attempt can't drain the channel past ar_in_target.
                 # remaining_drain = current_inbound_sats - target_inbound_sats.
@@ -1377,7 +1378,7 @@ async def run_rebalancer(rebalance, worker):
                 else:
                     next_value = rebalance.value/dec
 
-                inbound_cans = auto_rebalance_channels.filter(remote_pubkey=rebalance.last_hop_pubkey).filter(auto_rebalance=True, inbound_can__gte=1)
+                inbound_cans = auto_rebalance_channels.filter(remote_pubkey=rebalance.last_hop_pubkey).filter(auto_rebalance=True, inbound_can__gte=1, remote_disabled=False)
                 if await inbound_cans_len(inbound_cans) > 0 and len(outbound_cans) > 0:
                     next_rebalance = Rebalancer(value=int(next_value), fee_limit=round(rebalance.fee_limit/(rebalance.value/next_value), 3), outgoing_chan_ids=str(outbound_cans).replace('\'', ''), last_hop_pubkey=rebalance.last_hop_pubkey, target_alias=original_alias, duration=1, status=1)
                     await save_record(next_rebalance)
@@ -1461,6 +1462,7 @@ def auto_schedule() -> List[Rebalancer]:
         outbound_cans = list(
             auto_rebalance_channels
             .filter(percent_outbound__gte=F('ar_out_target'))
+            .filter(local_disabled=False)  # we wouldn't forward via this channel ourselves
             .filter(
                 Q(ar_source=True)        # explicitly enabled as source in Advanced Rebalancing
                 | Q(auto_rebalance=False) # non-AR-managed channels are free to drain
@@ -1475,7 +1477,7 @@ def auto_schedule() -> List[Rebalancer]:
         )
         inbound_cans = (
             auto_rebalance_channels
-            .filter(auto_rebalance=True, inbound_can__gte=1)
+            .filter(auto_rebalance=True, inbound_can__gte=1, remote_disabled=False)
             .exclude(remote_pubkey__in=already_scheduled)
             .order_by('-inbound_can')
         )
