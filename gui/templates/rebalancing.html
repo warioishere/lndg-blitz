@@ -143,8 +143,11 @@
     ch.fee_check = parseInt(ch.fee_ratio*100/ch.ar_max_cost)
     ch.steps = parseInt(ch.inbound_can < 1 ? 0 : ((ch.percent_inbound - ch.ar_in_target)/(ch.ar_amt_target*100/ch.capacity)+0.999))
 
-    ch.elegible = ch.inbound_can >= 1 && ch.fee_check < 100 && ch.auto_rebalance, 
-    ch.available = ch.is_active && !ch.auto_rebalance && ch.percent_outbound / ch.ar_out_target >=1
+    ch.elegible = ch.inbound_can >= 1 && ch.fee_check < 100 && ch.auto_rebalance,
+    // Match rebalancer.get_out_cans: a channel can serve as outbound source if it's active,
+    // sitting at or above its ar_out_target, and either explicitly tagged ar_source=True
+    // (Advanced Rebalancing toggle) or not an AR-managed target at all.
+    ch.available = ch.is_active && ch.percent_outbound / ch.ar_out_target >= 1 && (ch.ar_source || !ch.auto_rebalance)
     return ch
   }
   document.addEventListener('DOMContentLoaded', async () => {
