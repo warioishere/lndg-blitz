@@ -1362,6 +1362,7 @@ def channel(request):
             channels_df['new_rate'] = results_df[results_df['chan_id']==chan_id]['new_rate']
             channels_df['adjustment'] = results_df[results_df['chan_id']==chan_id]['adjustment']
             channels_df['net_routed_7day'] = results_df[results_df['chan_id']==chan_id]['net_routed_7day']
+            channels_df['eligible'] = results_df[results_df['chan_id']==chan_id]['eligible']
         else:
             channels_df = DataFrame()
             payments_df = DataFrame()
@@ -1730,6 +1731,8 @@ def actions(request):
         for channel in channels:
             result = {}
             result['chan_id'] = channel.chan_id
+            result['funding_txid'] = channel.funding_txid
+            result['output_index'] = channel.output_index
             result['short_chan_id'] = channel.short_chan_id
             result['remote_pubkey'] = channel.remote_pubkey
             result['alias'] = channel.alias
@@ -2536,19 +2539,20 @@ def close_channel_form(request):
                     target_fee = form.cleaned_data['target_fee']
                     if not force_close and not target_fee:
                         messages.error(request, 'Expected a fee rate for graceful closure. Please try again.')
-                    channel_point = ln.ChannelPoint()
-                    channel_point.funding_txid_bytes = bytes.fromhex(funding_txid)
-                    channel_point.funding_txid_str = funding_txid
-                    channel_point.output_index = output_index
-                    stub = lnrpc.LightningStub(lnd_connect())
-                    if force_close:
-                        for response in stub.CloseChannel(ln.CloseChannelRequest(channel_point=channel_point, force=True)):
-                            messages.success(request, 'Channel force closed! Closing TXID: ' + str(response.close_pending.txid[::-1].hex()) + ':' + str(response.close_pending.output_index))
-                            break
                     else:
-                        for response in stub.CloseChannel(ln.CloseChannelRequest(channel_point=channel_point, sat_per_byte=target_fee)):
-                            messages.success(request, 'Channel gracefully closed! Closing TXID: ' + str(response.close_pending.txid[::-1].hex()) + ':' + str(response.close_pending.output_index))
-                            break
+                        channel_point = ln.ChannelPoint()
+                        channel_point.funding_txid_bytes = bytes.fromhex(funding_txid)
+                        channel_point.funding_txid_str = funding_txid
+                        channel_point.output_index = output_index
+                        stub = lnrpc.LightningStub(lnd_connect())
+                        if force_close:
+                            for response in stub.CloseChannel(ln.CloseChannelRequest(channel_point=channel_point, force=True)):
+                                messages.success(request, 'Channel force closed! Closing TXID: ' + str(response.close_pending.txid[::-1].hex()) + ':' + str(response.close_pending.output_index))
+                                break
+                        else:
+                            for response in stub.CloseChannel(ln.CloseChannelRequest(channel_point=channel_point, sat_per_byte=target_fee)):
+                                messages.success(request, 'Channel gracefully closed! Closing TXID: ' + str(response.close_pending.txid[::-1].hex()) + ':' + str(response.close_pending.output_index))
+                                break
                 else:
                     messages.error(request, 'Channel ID is not valid. Please try again.')
             except Exception as e:
@@ -3096,7 +3100,7 @@ def update_pending(request):
             elif update_target == 5:
                 pending_channel.auto_rebalance = True if pending_channel.auto_rebalance == False or pending_channel.auto_rebalance == None else False
                 pending_channel.save()
-                messages.success(request, 'Auto rebalancer status for pending pending channel (' + str(funding_txid) + ') updated to a value of: ' + str(pending_channel.auto_rebalance))
+                messages.success(request, 'Auto rebalancer status for pending channel (' + str(funding_txid) + ') updated to a value of: ' + str(pending_channel.auto_rebalance))
             elif update_target == 6:
                 pending_channel.ar_max_cost = target
                 pending_channel.save()
@@ -3279,15 +3283,15 @@ def update_setting(request):
             elif key == 'ALL-MaxCost':
                 target = int(value)
                 channels = Channels.objects.filter(is_open=True).update(ar_max_cost=target)
-                messages.success(request, 'AR max cost %s for all channels updated to a value of: ' + str(target))
+                messages.success(request, 'AR max cost for all channels updated to a value of: ' + str(target))
             elif key == 'ALL-oTarget':
                 target = int(value)
                 channels = Channels.objects.filter(is_open=True).update(ar_out_target=target)
-                messages.success(request, 'AR outbound liquidity target %s for all channels updated to a value of: ' + str(target))
+                messages.success(request, 'AR outbound liquidity target for all channels updated to a value of: ' + str(target))
             elif key == 'ALL-iTarget':
                 target = int(value)
                 channels = Channels.objects.filter(is_open=True).update(ar_in_target=target)
-                messages.success(request, 'AR inbound liquidity target %s for all channels updated to a value of: ' + str(target))
+                messages.success(request, 'AR inbound liquidity target for all channels updated to a value of: ' + str(target))
             elif key == 'ALL-AR':
                 target = int(value)
                 channels = Channels.objects.filter(is_open=True).update(auto_rebalance=target)
