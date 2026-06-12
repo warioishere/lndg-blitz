@@ -34,6 +34,18 @@ def main(channels):
     filter_1day = datetime.now() - timedelta(days=1)
     filter_4h = datetime.now() - timedelta(hours=4)
     filter_7day = datetime.now() - timedelta(days=7)
+    # Auto-detect: default CurveMode to 0 if user has customized legacy-only settings.
+    # Must run BEFORE the legacy AF-* reads below: get_local_setting is get-or-create
+    # and would otherwise create all legacy keys first, making this detection always
+    # true and forcing legacy mode even on fresh installs.
+    if not LocalSettings.objects.filter(key='AF-CurveMode').exists():
+        legacy_keys = [
+            'AF-Multiplier', 'AF-FlowScale', 'AF-MaxStep', 'AF-LowLiqLimit',
+            'AF-ExcessLimit', 'AF-LowLiqBoost', 'AF-LowLiqBoostAR', 'AF-ExcessBoost',
+            'AF-ExcessBoostOn',
+        ]
+        if LocalSettings.objects.filter(key__in=legacy_keys).exists():
+            LocalSettings(key='AF-CurveMode', value='0').save()
     max_rate = get_local_setting('AF-MaxRate', 2500, int)
     min_rate = get_local_setting('AF-MinRate', 0, int)
     increment = get_local_setting('AF-Increment', 5, int)
@@ -56,15 +68,6 @@ def main(channels):
         bypass_peer_rate_on_htlc = False
     flow_scale = get_local_setting('AF-FlowScale', 1.0, float)
     max_step = get_local_setting('AF-MaxStep', 100, int)
-    # Auto-detect: default CurveMode to 0 if user has customized legacy-only settings
-    if not LocalSettings.objects.filter(key='AF-CurveMode').exists():
-        legacy_keys = [
-            'AF-Multiplier', 'AF-FlowScale', 'AF-MaxStep', 'AF-LowLiqLimit',
-            'AF-ExcessLimit', 'AF-LowLiqBoost', 'AF-LowLiqBoostAR', 'AF-ExcessBoost',
-            'AF-ExcessBoostOn',
-        ]
-        if LocalSettings.objects.filter(key__in=legacy_keys).exists():
-            LocalSettings(key='AF-CurveMode', value='0').save()
     curve_mode = get_local_setting('AF-CurveMode', '1', str) == '1'
     intensity = get_local_setting('AF-Intensity', 50, int)
     exponent = get_local_setting('AF-Exponent', 2.0, float)
