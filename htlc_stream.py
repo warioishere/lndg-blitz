@@ -37,16 +37,16 @@ def main():
                     FailedHTLCs(amount=amount, chan_id_in=in_chan_id, chan_id_out=out_chan_id, chan_in_alias=in_chan_alias, chan_out_alias=out_chan_alias, chan_out_liq=out_chan_liq, chan_out_pending=out_chan_pending, wire_failure=wire_failure, failure_detail=failure_detail, missed_fee=missed_fee).save()
                 elif response.event_type == 3 and str(response.forward_event) != '':
                     # Add forward_event
-                    key = str(response.incoming_channel_id) + str(response.outgoing_channel_id) + str(response.incoming_htlc_id) + str(response.outgoing_htlc_id)
+                    key = f"{response.incoming_channel_id}:{response.outgoing_channel_id}:{response.incoming_htlc_id}:{response.outgoing_htlc_id}"
                     all_forwards[key] = response.forward_event
                 elif response.event_type == 3 and str(response.settle_event) != '':
                     # Delete forward_event
-                    key = str(response.incoming_channel_id) + str(response.outgoing_channel_id) + str(response.incoming_htlc_id) + str(response.outgoing_htlc_id)
+                    key = f"{response.incoming_channel_id}:{response.outgoing_channel_id}:{response.incoming_htlc_id}:{response.outgoing_htlc_id}"
                     if key in all_forwards.keys():
                         del all_forwards[key]
                         emergency_forward_check(lightning_stub, response.outgoing_channel_id)
                 elif response.event_type == 3 and str(response.forward_fail_event) == '':
-                    key = str(response.incoming_channel_id) + str(response.outgoing_channel_id) + str(response.incoming_htlc_id) + str(response.outgoing_htlc_id)
+                    key = f"{response.incoming_channel_id}:{response.outgoing_channel_id}:{response.incoming_htlc_id}:{response.outgoing_htlc_id}"
                     if key in all_forwards.keys():
                         forward_event = all_forwards[key]
                         in_chan_id = response.incoming_channel_id
