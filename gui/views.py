@@ -391,7 +391,7 @@ def advanced_rebalancing(request):
             Rebalancer(
                 value=value,
                 fee_limit=fee_limit,
-                outgoing_chan_ids=str([source_chan_id]),
+                outgoing_chan_ids=str([source_chan_id]).replace('\'', ''),
                 last_hop_pubkey=pubkey,
                 target_alias=target_alias,
                 duration=duration,

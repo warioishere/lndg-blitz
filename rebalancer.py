@@ -1531,7 +1531,7 @@ def auto_schedule() -> List[Rebalancer]:
                     last_rebalance = Rebalancer.objects.filter(last_hop_pubkey=pub).exclude(status=0).order_by('-id')[0]
                     if not (last_rebalance.status == 2 or (last_rebalance.status > 2 and (int((datetime.now() - last_rebalance.stop).total_seconds() / 60) > wait_period)) or (last_rebalance.status == 1 and ((int((datetime.now() - last_rebalance.start).total_seconds() / 60) - last_rebalance.duration) > wait_period))):
                         continue
-                new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str([source_id]), last_hop_pubkey=pub, target_alias=target.alias, duration=target_time)
+                new_rebalance = Rebalancer(value=target_value, fee_limit=target_fee, outgoing_chan_ids=str([source_id]).replace('\'', ''), last_hop_pubkey=pub, target_alias=target.alias, duration=target_time)
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Creating Auto Rebalance Request for allowed target {pub} via {source_id}")
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Value: {target_value} / {target.ar_amt_target} | Fee: {target_fee} | Duration: {target_time}")
                 if not _alias_cache or monotonic() - _alias_cache_loaded_at > _ALIAS_CACHE_TTL:
