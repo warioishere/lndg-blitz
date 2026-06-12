@@ -9,6 +9,10 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # 0058 created an (unrelated) ProbeLog table; drop it first so this CreateModel
+        # works on a fresh database. On existing deployments this migration was already
+        # applied (after a manual DROP + fake), so it never re-runs here.
+        migrations.DeleteModel(name='ProbeLog'),
         migrations.CreateModel(
             name='ProbeLog',
             fields=[
