@@ -487,6 +487,13 @@ def main(channels):
     # Mirror fee targets across multi-channel peers
     channels_df = mirror_peer_fee_targets(channels_df)
 
+    # A positive inbound fee is a manual override (advanced / fee rates iRate) - leave it
+    # alone, AF only manages discounts. Applied after the mirror so a peer's other channels
+    # cannot drag it back. Set the rate to 0 or below to hand the channel back to AF.
+    manual_inbound = channels_df['local_inbound_fee_rate'] > 0
+    channels_df.loc[manual_inbound, 'new_inbound_rate'] = channels_df.loc[manual_inbound, 'local_inbound_fee_rate']
+    channels_df.loc[manual_inbound, 'inbound_adjustment'] = 0
+
     # Return results
     return channels_df
 

@@ -2959,8 +2959,14 @@ def update_channel(request):
                     target_fee_rate = int(round(target))
                     stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=db_channel.local_cltv, inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target_fee_rate)))
                     db_channel.local_inbound_fee_rate = target_fee_rate
+                    # a manual rate wins over the offset automation, which would otherwise
+                    # recompute this channel on the next outbound fee change or offset job
+                    cleared_offset = db_channel.inbound_offset != 0
+                    db_channel.inbound_offset = 0
                     db_channel.save()
                     messages.success(request, 'Inbound fee rate for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target_fee_rate))
+                    if cleared_offset:
+                        messages.info(request, 'Inbound offset for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') cleared, the manual rate now wins.')
                 else:
                     messages.error(request, f'LND version too low to set inbound fees, update to v0.18+')
             elif update_target == 2:
@@ -3232,13 +3238,19 @@ def update_setting(request):
                 version = stub.GetInfo(ln.GetInfoRequest()).version
                 if float(version[:4]) >= 0.18:
                     channels = Channels.objects.filter(is_open=True)
+                    cleared_offsets = 0
                     for db_channel in channels:
                         channel_point = point(db_channel)
                         inbound_base_fee = db_channel.local_inbound_base_fee if db_channel.local_inbound_base_fee else 0
                         stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=db_channel.local_cltv, inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=target)))
                         db_channel.local_inbound_fee_rate = target
+                        # same as the per channel update: a manual rate wins over the offset
+                        cleared_offsets += 1 if db_channel.inbound_offset != 0 else 0
+                        db_channel.inbound_offset = 0
                         db_channel.save()
                     messages.success(request, 'Inbound fee rate for all open channels updated to a value of: ' + str(target))
+                    if cleared_offsets:
+                        messages.info(request, f'Inbound offset cleared on {cleared_offsets} channel(s), the manual rate now wins.')
                 else:
                     messages.error(request, f'LND version too low to set inbound fees, update to v0.18+')
             elif key == 'ALL-iBase':
@@ -4411,6 +4423,9 @@ def chan_policy(request):
                     return_response['inbound_base_fee'] = serializer.validated_data['inbound_base_fee']
                 if serializer.validated_data['inbound_fee_rate'] is not None:
                     db_channel.local_inbound_fee_rate = serializer.validated_data['inbound_fee_rate']
+                    # same as the UI: an explicitly set rate wins over the offset automation
+                    return_response['cleared_inbound_offset'] = db_channel.inbound_offset != 0
+                    db_channel.inbound_offset = 0
                     db_channel.save()
                     return_response['inbound_fee_rate'] = serializer.validated_data['inbound_fee_rate']
                 if serializer.validated_data['cltv'] is not None:

@@ -740,11 +740,14 @@ def auto_fees(stub):
                     version = stub.GetInfo(ln.GetInfoRequest()).version
                     if inbound_enabled and float(version[:4]) >= 0.18:
                         inbound_fee_rate = int(target_channel['new_inbound_rate'])
-                        # if we are using a discount, then discount our base fee to mirror outbound
-                        if inbound_fee_rate == 0:
+                        # if we are using a discount, then discount our base fee to mirror outbound.
+                        # a positive rate is a manual override, keep the base fee set alongside it.
+                        if inbound_fee_rate < 0:
+                            inbound_base_fee = -channel.local_base_fee
+                        elif inbound_fee_rate == 0:
                             inbound_base_fee = 0
                         else:
-                            inbound_base_fee = -channel.local_base_fee
+                            inbound_base_fee = channel.local_inbound_base_fee if channel.local_inbound_base_fee else 0
                         stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=channel.local_base_fee, fee_rate=(target_channel['new_rate']/1000000), time_lock_delta=channel.local_cltv, inbound_fee=ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_fee_rate)))
                         if target_channel['inbound_adjustment'] != 0:
                             print(f"{datetime.now().strftime('%c')} : [Data] : Updating inbound fees for channel {str(target_channel['chan_id'])} to a value of: {str(target_channel['new_inbound_rate'])}")
