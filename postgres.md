@@ -44,6 +44,10 @@ DATABASES = {
 Initialize the postgres database  
 `.venv/bin/python manage.py migrate`
 
+If LND itself runs on Postgres (`db.backend=postgres`) in the same cluster, add the name of its
+database to `lndg/lndg/settings.py` so the dashboard shows its size instead of a `channel.db` file:  
+`LND_DB_NAME = 'lndb'`
+
 ## OPTIONAL: Migrating An Existing Database
 Stop the LNDg services controller and web service  
 `sudo systemctl stop lndg-controller.service`  

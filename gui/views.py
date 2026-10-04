@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.shortcuts import get_object_or_404, render, redirect
 from django.http import JsonResponse
+from django.db import connection
 from django.db.models import Sum, IntegerField, Count, Max, F, Q, Case, When, Value, FloatField, ExpressionWrapper, DateTimeField, DurationField, OuterRef, Subquery, Prefetch
 from django.db.models.functions import Round, TruncDay, Coalesce
 from django.contrib.auth.decorators import login_required
@@ -3707,6 +3708,12 @@ def forwards_summary(request):
 
 def get_channeldb_file_size():
     try:
+        # LND on Postgres (db.backend=postgres): size of its database, same cluster as LNDg's
+        lnd_db_name = getattr(settings, 'LND_DB_NAME', '')
+        if lnd_db_name:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT pg_database_size(%s)', [lnd_db_name])
+                return round(cursor.fetchone()[0]*0.000000001, 3)
         # Create the Enable setting if it doesn't exist ---
         enabled_setting = LocalSettings.objects.filter(key='RemoteFSEnabled').first()
         if not enabled_setting:
