@@ -292,7 +292,12 @@ def main(channels):
             # Amplify when flow direction matches adjustment direction
             if (adj > 0 and net_flow_ratio > 0) or (adj < 0 and net_flow_ratio < 0):
                 adj *= (1 + flow_weight * abs(net_flow_ratio))
-        return int(round(max(-max_step, min(max_step, adj))))
+        adj = int(round(max(-max_step, min(max_step, adj))))
+        # A depleted channel below its target rises at least 1 ppm per run, as in
+        # legacy mode; a small deviation squared would otherwise round to 0.
+        if adj == 0 and sign > 0 and row['out_percent'] <= lowliq_limit:
+            adj = min(1, max_step)
+        return adj
 
     def compute_curve_inbound_adjustment(row):
         peer_tgt = row.get('peer_out_target', 10)
