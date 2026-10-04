@@ -2381,9 +2381,7 @@ def fee_limit_protection(request):
         channels = Channels.objects.filter(is_open=True, auto_rebalance=True)
         channel_list = []
         for ch in channels:
-            payments = Payments.objects.filter(status=2, rebal_chan=ch.chan_id).order_by('-creation_date')[:lookback]
-            ppm_values = [(p.fee * 1000000 / p.value) for p in payments if p.value]
-            avg_ppm = int(sum(ppm_values) / len(ppm_values)) if ppm_values else None
+            avg_ppm = af.rebalance_cost_ppm(ch.chan_id, lookback)
             channel_list.append({'chan_id': ch.chan_id, 'alias': ch.alias, 'avg_ppm': avg_ppm, 'flp_enabled': ch.flp_enabled, 'flp_safety': ch.flp_safety})
         context = {
             'channels': channel_list,

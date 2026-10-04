@@ -153,7 +153,21 @@ def update_payment(stub, payment, self_pubkey):
                         db_payment.message = message
                     if hop_count == total_hops and hop.pub_key == self_pubkey and db_payment.rebal_chan is None:
                         db_payment.rebal_chan = hop.chan_id
+    if payment.status == 2 and db_payment.rebal_chan is not None:
+        db_payment.source_fee_rate = rebalance_source_fee_rate(payment)
     db_payment.save()
+
+def rebalance_source_fee_rate(payment):
+    # Opportunity cost of a rebalance: the outbound ppm of the channel(s) the liquidity
+    # left through, weighted by the amount each successful part sent. None if no source
+    # channel is known anymore, the cost lookup then falls back to its current fee.
+    parts = [(str(a.route.hops[0].chan_id), a.route.total_amt_msat) for a in payment.htlcs if a.status == 1 and a.route.hops]
+    fee_rates = dict(Channels.objects.filter(chan_id__in=[chan_id for chan_id, _ in parts]).values_list('chan_id', 'local_fee_rate'))
+    weighted = [(fee_rates[chan_id], amt) for chan_id, amt in parts if chan_id in fee_rates]
+    total_amt = sum(amt for _, amt in weighted)
+    if total_amt == 0:
+        return None
+    return int(round(sum(rate * amt for rate, amt in weighted) / total_amt))
 
 def update_invoices(stub):
     open_invoices = Invoices.objects.filter(state=0).order_by('index')

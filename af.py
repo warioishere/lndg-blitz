@@ -10,6 +10,22 @@ django.setup()
 from gui.models import Forwards, Channels, LocalSettings, FailedHTLCs, Payments
 from utils import get_local_setting
 
+def rebalance_cost_ppm(chan_id, lookback):
+    """Average cost in ppm of the last `lookback` successful rebalances into chan_id:
+    the routing fee paid plus the outbound fee of the source channel (opportunity cost).
+    Payments imported before source_fee_rate existed fall back to the source channel's
+    current fee rate; MPP or no longer known sources count as 0."""
+    payments = list(Payments.objects.filter(status=2, rebal_chan=chan_id).order_by('-creation_date')[:lookback])
+    fallback_ids = {p.chan_out for p in payments if p.source_fee_rate is None and p.chan_out}
+    current_rates = dict(Channels.objects.filter(chan_id__in=fallback_ids).values_list('chan_id', 'local_fee_rate')) if fallback_ids else {}
+    ppm_values = []
+    for p in payments:
+        if not p.value:
+            continue
+        source_ppm = p.source_fee_rate if p.source_fee_rate is not None else current_rates.get(p.chan_out, 0)
+        ppm_values.append(p.fee * 1000000 / p.value + source_ppm)
+    return int(sum(ppm_values) / len(ppm_values)) if ppm_values else None
+
 def main(channels):
     channels_df = DataFrame.from_records(channels.values())
     if channels_df.shape[0] == 0:
@@ -17,19 +33,7 @@ def main(channels):
     lookback = get_local_setting('FLP-Lookback', 10, int)
     flp_enabled_global = get_local_setting('FLP-Enabled', '0', str) == '1'
     flp_safety_global = get_local_setting('FLP-Safety', 0, int)
-    avg_costs = {}
-    for ch in channels:
-        payments = (
-            Payments.objects.filter(status=2, rebal_chan=ch.chan_id)
-            .order_by('-creation_date')[:lookback]
-        )
-        ppm_values = [
-            (p.fee * 1000000 / p.value) for p in payments if p.value
-        ]
-        if ppm_values:
-            avg_costs[ch.chan_id] = int(sum(ppm_values) / len(ppm_values))
-        else:
-            avg_costs[ch.chan_id] = None
+    avg_costs = {ch.chan_id: rebalance_cost_ppm(ch.chan_id, lookback) for ch in channels}
     channels_df['avg_rebalance_cost'] = channels_df['chan_id'].map(avg_costs)
     filter_1day = datetime.now() - timedelta(days=1)
     filter_4h = datetime.now() - timedelta(hours=4)

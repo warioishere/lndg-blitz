@@ -26,6 +26,9 @@ class Payments(models.Model):
     message = models.CharField(null=True, max_length=1000)
     cleaned = models.BooleanField(default=False)
     rebal_chan = models.CharField(max_length=20, null=True)
+    # outbound ppm of the source channel(s) when the rebalance was imported, amount
+    # weighted across MPP parts; the opportunity cost part of the rebalance cost
+    source_fee_rate = models.IntegerField(null=True)
     class Meta:
         app_label = 'gui'
         indexes = [
