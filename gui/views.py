@@ -181,7 +181,7 @@ def channels(request):
             channels_df['revenue_30day'] = channels_df.apply(lambda row: (int(forwards_df_out_30d_sum.loc[row.chan_id].fee) + row['inbound_fee_out_30day']) if forwards_df_out_30d_sum.empty == False and (forwards_df_out_30d_sum.index == row.chan_id).any() else 0, axis=1)
             channels_df['revenue_assist_7day'] = channels_df.apply(lambda row: (int(forwards_df_in_7d_sum.loc[row.chan_id].fee) - row['inbound_fee_in_7day']) if forwards_df_in_7d_sum.empty == False and (forwards_df_in_7d_sum.index == row.chan_id).any() else 0, axis=1)
             channels_df['revenue_assist_30day'] = channels_df.apply(lambda row: (int(forwards_df_in_30d_sum.loc[row.chan_id].fee) - row['inbound_fee_in_30day']) if forwards_df_in_30d_sum.empty == False and (forwards_df_in_30d_sum.index == row.chan_id).any() else 0, axis=1)
-            channels_df['costs_7day'] = channels_df.apply(lambda row: 0 if row['rebal_in_7day'] == 0 else int(payments_df_7d.set_index('payment_hash', inplace=False).loc[invoice_hashes_7d[row.chan_id] if invoice_hashes_7d.empty == False and (invoice_hashes_7d.index == row.chan_id).any() else []]['fee'].sum()), axis=1)
+            channels_df['costs_7day'] = channels_df.apply(lambda row: 0 if row['rebal_in_7day'] == 0 or payments_df_7d.empty else int(payments_df_7d.set_index('payment_hash', inplace=False).reindex(invoice_hashes_7d[row.chan_id] if invoice_hashes_7d.empty == False and (invoice_hashes_7d.index == row.chan_id).any() else [])['fee'].sum()), axis=1)
             channels_df['costs_30day'] = channels_df.apply(lambda row: 0 if row['rebal_in_30day'] == 0 else int(payments_df_30d.set_index('payment_hash', inplace=False).loc[invoice_hashes_30d[row.chan_id] if invoice_hashes_30d.empty == False and (invoice_hashes_30d.index == row.chan_id).any() else []]['fee'].sum()), axis=1)
             channels_df['costs_7day'] = channels_df['costs_7day'] + channels_df['inbound_fee_in_7day']
             channels_df['costs_30day'] = channels_df['costs_30day'] + channels_df['inbound_fee_in_30day']
@@ -266,34 +266,8 @@ def full_fee_adj(request):
             if ch.chan_id in processed:
                 continue
             processed.add(ch.chan_id)
-            new_rate = ch.local_fee_rate + delta_ppm
-            if new_rate < 0:
-                new_rate = 0
-            channel_point = point(ch)
-            policy_kwargs = dict(
-                chan_point=channel_point,
-                base_fee_msat=ch.local_base_fee,
-                fee_rate=(new_rate/1000000),
-                time_lock_delta=ch.local_cltv
-            )
-            inbound_target = None
-            if ch.inbound_offset != 0:
-                balance = new_rate + ch.inbound_offset
-                inbound_target = int(round(-balance)) if balance > 0 else 0
-                inbound_base_fee = ch.local_inbound_base_fee if ch.local_inbound_base_fee else 0
-                policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
-            stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(**policy_kwargs))
-            old_rate = ch.local_fee_rate
-            ch.local_fee_rate = new_rate
-            ch.fees_updated = datetime.now()
-            if inbound_target is not None:
-                old_inbound = ch.local_inbound_fee_rate if ch.local_inbound_fee_rate else 0
-                ch.local_inbound_fee_rate = inbound_target
-                ch.offset_updated = datetime.now()
-            ch.save()
-            Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting="Manual", old_value=old_rate, new_value=new_rate).save()
-            if inbound_target is not None and old_inbound != inbound_target:
-                InboundFeeLog(chan_id=ch.chan_id, peer_alias=ch.alias, setting='Fee Adj Offset', old_value=old_inbound, new_value=inbound_target).save()
+            new_rate = max(ch.local_fee_rate + delta_ppm, 0)
+            apply_outbound_fee(stub, ch, new_rate)
             processed_siblings, updated_siblings = sync_peer_outbound_fee(ch, new_rate, stub=stub)
             processed.update(processed_siblings)
             updated += 1 + len(updated_siblings)
@@ -580,8 +554,6 @@ def amboss_fees(request):
             'amb_update_hours': update_hours,
             'amb_enabled': auto_enabled,
         }
-        if request.GET.get('ajax'):
-            return JsonResponse(context)
         return render(request, 'amboss_fees.html', context)
     else:
         return redirect('home')
@@ -668,17 +640,8 @@ def closures(request):
         try:
             stub = lnrpc.LightningStub(lnd_connect())
             pending_channels = stub.PendingChannels(ln.PendingChannelsRequest())
-            pending_closed = None
             pending_force_closed = None
             waiting_for_close = None
-            if pending_channels.pending_closing_channels:
-                target_resp = pending_channels.pending_closing_channels
-                pending_closed = []
-                for i in range(0,len(target_resp)):
-                    pending_item = {'remote_node_pub':target_resp[i].channel.remote_node_pub,'channel_point':target_resp[i].channel.channel_point,'capacity':target_resp[i].channel.capacity,'local_balance':target_resp[i].channel.local_balance,'remote_balance':target_resp[i].channel.remote_balance,'local_chan_reserve_sat':target_resp[i].channel.local_chan_reserve_sat,
-                    'remote_chan_reserve_sat':target_resp[i].channel.remote_chan_reserve_sat,'initiator':target_resp[i].channel.initiator,'commitment_type':target_resp[i].channel.commitment_type, 'local_commit_fee_sat': target_resp[i].commitments.local_commit_fee_sat, 'limbo_balance':target_resp[i].limbo_balance, 'closing_txid':target_resp[i].closing_txid}
-                    pending_item.update(pending_channel_details(target_resp[i].channel.channel_point))
-                    pending_closed.append(pending_item)
             if pending_channels.pending_force_closing_channels:
                 target_resp = pending_channels.pending_force_closing_channels
                 pending_force_closed = []
@@ -711,7 +674,6 @@ def closures(request):
                     merged['short_chan_id'] = merged['short_chan_id'].fillna('')
                     merged['short_chan_id'] = merged.apply(lambda row: str(int(row.chan_id) >> 40) + 'x' + str(int(int(row.chan_id) >> 16) & 0xFFFFFF) + 'x' + str(int(row.chan_id) & 0xFFFF) if row.short_chan_id == '' else row.short_chan_id, axis=1)
             context = {
-                'pending_closed': pending_closed,
                 'pending_force_closed': pending_force_closed,
                 'waiting_for_close': waiting_for_close,
                 'closures': [] if merged.empty else merged.sort_values(by=['close_height'], ascending=False).to_dict(orient='records'),
@@ -769,7 +731,7 @@ def towers(request):
                 error = str(e)
             return render(request, 'error.html', {'error': error})
     else:
-        return redirect(request.META.get('HTTP_REFERER'))
+        return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def add_tower_form(request):
@@ -1016,30 +978,35 @@ def chart(request):
     forwards = Forwards.objects.annotate(dt=TruncDay('forward_date')).values('dt').annotate(cost=Value(0, output_field=FloatField()), revenue=Sum('fee', output_field=FloatField()), onchain=Value(0))
     onchain = Onchain.objects.annotate(dt=TruncDay('time_stamp')).values('dt').annotate(cost=Value(0, output_field=FloatField()), revenue=Value(0, output_field=FloatField()), onchain=Sum('fee'))
 
-    # Estimate blockchain timing parameters
+    rows = payments.union(invoices, forwards, onchain)
+    # closure dates are estimated from the block timing of on-chain txs, so they need at least one
     first_record = Onchain.objects.order_by('time_stamp').first()
-    first_date = first_record.time_stamp
-    first_block = first_record.block_height
-    last_record = Onchain.objects.order_by('time_stamp').last()
-    last_date = last_record.time_stamp
-    last_block = last_record.block_height
-    time_interval_per_block = timedelta(minutes=10)
-    if last_block > first_block:
-        time_interval_per_block =  (last_date - first_date) / (last_block - first_block)
-    offset = first_date - first_block * time_interval_per_block
-    # Convert close_height to datetime
-    datetime_from_blocks = TruncDay(
-        ExpressionWrapper(
-            offset
-            + ExpressionWrapper(
-                F('close_height') * time_interval_per_block,
-                output_field=DurationField(),
-            ),
-            output_field=DateTimeField()
+    if first_record is not None:
+        first_date = first_record.time_stamp
+        first_block = first_record.block_height
+        last_record = Onchain.objects.order_by('time_stamp').last()
+        last_date = last_record.time_stamp
+        last_block = last_record.block_height
+        time_interval_per_block = timedelta(minutes=10)
+        if last_block > first_block:
+            time_interval_per_block =  (last_date - first_date) / (last_block - first_block)
+        offset = first_date - first_block * time_interval_per_block
+        # Convert close_height to datetime
+        datetime_from_blocks = TruncDay(
+            ExpressionWrapper(
+                offset
+                + ExpressionWrapper(
+                    F('close_height') * time_interval_per_block,
+                    output_field=DurationField(),
+                ),
+                output_field=DateTimeField()
+            )
         )
-    )
-    closures = Closures.objects.annotate(dt=datetime_from_blocks).values('dt').annotate(cost=Value(0, output_field=FloatField()), revenue=Value(0, output_field=FloatField()), onchain=Sum('closing_costs'))
-    balance = DataFrame.from_records(payments.union(invoices, forwards, onchain, closures).values('dt', 'cost', 'revenue', 'onchain'))
+        closures = Closures.objects.annotate(dt=datetime_from_blocks).values('dt').annotate(cost=Value(0, output_field=FloatField()), revenue=Value(0, output_field=FloatField()), onchain=Sum('closing_costs'))
+        rows = payments.union(invoices, forwards, onchain, closures)
+    balance = DataFrame.from_records(rows.values('dt', 'cost', 'revenue', 'onchain'))
+    if balance.empty:
+        return Response([])
     results = balance.groupby('dt').sum().reset_index().sort_values('dt')
     return Response(results.to_dict(orient='records'))
 
@@ -1862,7 +1829,7 @@ def batch(request):
         }
         return render(request, 'batch.html', context)
     else:
-        return redirect(request.META.get('HTTP_REFERER'))
+        return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def trades(request):
@@ -1873,7 +1840,7 @@ def trades(request):
         }
         return render(request, 'trades.html', context)
     else:
-        return redirect(request.META.get('HTTP_REFERER'))
+        return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def reset_node_reputation(request):
@@ -1911,7 +1878,7 @@ def reset(request):
         }
         return render(request, 'reset.html', context)
     else:
-        return redirect(request.META.get('HTTP_REFERER'))
+        return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def addresses(request):
@@ -1932,7 +1899,7 @@ def addresses(request):
                 error = str(e)
             return render(request, 'error.html', {'error': error})
     else:
-        return redirect(request.META.get('HTTP_REFERER'))
+        return redirect(request.META.get('HTTP_REFERER', '/'))
 
 def open_peer(peer_pubkey, stub):
     if Peers.objects.filter(pubkey=peer_pubkey, connected=True).exists():
@@ -2640,7 +2607,7 @@ def rebalance(request):
                 messages.error(request, 'Error entering rebalancer request! Error: ' + error_msg)
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 def get_local_settings(*prefixes):
     form = []
@@ -2911,26 +2878,7 @@ def update_channel(request):
                 messages.success(request, 'Base fee for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(target_base_fee))
             elif update_target == 1:
                 stub = lnrpc.LightningStub(lnd_connect())
-                channel_point = point(db_channel)
-                policy_kwargs = dict(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(target/1000000), time_lock_delta=db_channel.local_cltv)
-                inbound_target = None
-                if db_channel.inbound_offset != 0:
-                    balance = target + db_channel.inbound_offset
-                    inbound_target = int(round(-balance)) if balance > 0 else 0
-                    inbound_base_fee = db_channel.local_inbound_base_fee if db_channel.local_inbound_base_fee else 0
-                    policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
-                stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(**policy_kwargs))
-                old_fee_rate = db_channel.local_fee_rate
-                db_channel.local_fee_rate = target
-                db_channel.fees_updated = datetime.now()
-                if inbound_target is not None:
-                    old_inbound = db_channel.local_inbound_fee_rate if db_channel.local_inbound_fee_rate else 0
-                    db_channel.local_inbound_fee_rate = inbound_target
-                    db_channel.offset_updated = datetime.now()
-                db_channel.save()
-                Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Manual"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
-                if inbound_target is not None and old_inbound != inbound_target:
-                    InboundFeeLog(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting='Fee Adj Offset', old_value=old_inbound, new_value=inbound_target).save()
+                apply_outbound_fee(stub, db_channel, target)
                 _, updated_siblings = sync_peer_outbound_fee(db_channel, target, stub=stub)
                 if updated_siblings:
                     messages.info(request, f'Synced outbound fee with {len(updated_siblings)} sibling channel(s).')
@@ -3003,8 +2951,9 @@ def update_channel(request):
             elif update_target == 9:
                 stub = lnrpc.LightningStub(lnd_connect())
                 channel_point = point(db_channel)
-                stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=target))
-                db_channel.local_cltv = target
+                # target comes from a FloatField; the protobuf field only takes an int
+                stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(db_channel.local_fee_rate/1000000), time_lock_delta=int(target)))
+                db_channel.local_cltv = int(target)
                 db_channel.save()
                 messages.success(request, 'CLTV for channel ' + str(db_channel.alias) + ' (' + str(db_channel.chan_id) + ') updated to a value of: ' + str(float(target)))
             elif update_target == 10:
@@ -3065,7 +3014,7 @@ def update_channel(request):
                 messages.error(request, 'Invalid target code. Please try again.')
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def update_pending(request):
@@ -3122,7 +3071,7 @@ def update_pending(request):
                 messages.error(request, 'Invalid target code. Please try again.')
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 def point(ch: Channels):
     channel_point = ln.ChannelPoint()
@@ -3132,62 +3081,57 @@ def point(ch: Channels):
     return channel_point
 
 
+def offset_inbound_fee(ch, new_rate):
+    """Inbound fee rate the channel's inbound offset implies for a new outbound
+    rate, or None when the channel has no offset."""
+    if ch.inbound_offset == 0:
+        return None
+    balance = new_rate + ch.inbound_offset
+    return int(round(-balance)) if balance > 0 else 0
+
+
+def record_outbound_fee(ch, new_rate, inbound_target):
+    """DB side of a manual outbound fee change already pushed to LND: targeted
+    write plus the fee logs. Keeps the in-memory ch in step for callers that
+    save it again afterwards."""
+    now = datetime.now()
+    old_rate = ch.local_fee_rate
+    old_inbound = ch.local_inbound_fee_rate if ch.local_inbound_fee_rate else 0
+    fields = {'local_fee_rate': new_rate, 'fees_updated': now}
+    if inbound_target is not None:
+        fields.update(local_inbound_fee_rate=inbound_target, offset_updated=now)
+    Channels.objects.filter(pk=ch.pk).update(**fields)
+    for field, value in fields.items():
+        setattr(ch, field, value)
+    Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting="Manual", old_value=old_rate, new_value=new_rate).save()
+    if inbound_target is not None and old_inbound != inbound_target:
+        InboundFeeLog(chan_id=ch.chan_id, peer_alias=ch.alias, setting='Fee Adj Offset', old_value=old_inbound, new_value=inbound_target).save()
+
+
+def apply_outbound_fee(stub, ch, new_rate):
+    """Set a new outbound fee rate on LND and in the DB. A channel with an inbound
+    offset gets its inbound fee recomputed in the same policy update."""
+    inbound_target = offset_inbound_fee(ch, new_rate)
+    kwargs = dict(chan_point=point(ch), base_fee_msat=ch.local_base_fee, fee_rate=(new_rate/1000000), time_lock_delta=ch.local_cltv)
+    if inbound_target is not None:
+        kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=ch.local_inbound_base_fee if ch.local_inbound_base_fee else 0, fee_rate_ppm=inbound_target)
+    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(**kwargs))
+    record_outbound_fee(ch, new_rate, inbound_target)
+
+
 def sync_peer_outbound_fee(channel: Channels, new_rate: int, stub=None):
     """Mirror a manual outbound fee change across channels for the same peer."""
-
-    siblings = Channels.objects.filter(
-        remote_pubkey=channel.remote_pubkey,
-        is_open=True,
-    ).exclude(chan_id=channel.chan_id)
-
-    processed = set()
+    siblings = list(Channels.objects.filter(remote_pubkey=channel.remote_pubkey, is_open=True).exclude(chan_id=channel.chan_id))
+    processed = {sibling.chan_id for sibling in siblings}
     updated = set()
-
     if not siblings:
         return processed, updated
-
     client = stub or lnrpc.LightningStub(lnd_connect())
-
     for sibling in siblings:
-        processed.add(sibling.chan_id)
         if sibling.local_fee_rate == new_rate:
             continue
-
-        channel_point = point(sibling)
-        policy_kwargs = dict(
-            chan_point=channel_point,
-            base_fee_msat=sibling.local_base_fee,
-            fee_rate=(new_rate / 1000000),
-            time_lock_delta=sibling.local_cltv,
-        )
-        inbound_target = None
-        if sibling.inbound_offset != 0:
-            balance = new_rate + sibling.inbound_offset
-            inbound_target = int(round(-balance)) if balance > 0 else 0
-            inbound_base_fee = sibling.local_inbound_base_fee if sibling.local_inbound_base_fee else 0
-            policy_kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=inbound_base_fee, fee_rate_ppm=inbound_target)
-        client.UpdateChannelPolicy(
-            ln.PolicyUpdateRequest(**policy_kwargs)
-        )
-        old_rate = sibling.local_fee_rate
-        sibling.local_fee_rate = new_rate
-        sibling.fees_updated = datetime.now()
-        if inbound_target is not None:
-            old_inbound = sibling.local_inbound_fee_rate if sibling.local_inbound_fee_rate else 0
-            sibling.local_inbound_fee_rate = inbound_target
-            sibling.offset_updated = datetime.now()
-        sibling.save()
-        Autofees(
-            chan_id=sibling.chan_id,
-            peer_alias=sibling.alias,
-            setting="Manual",
-            old_value=old_rate,
-            new_value=new_rate,
-        ).save()
-        if inbound_target is not None and old_inbound != inbound_target:
-            InboundFeeLog(chan_id=sibling.chan_id, peer_alias=sibling.alias, setting='Fee Adj Offset', old_value=old_inbound, new_value=inbound_target).save()
+        apply_outbound_fee(client, sibling, new_rate)
         updated.add(sibling.chan_id)
-
     return processed, updated
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
@@ -3207,13 +3151,7 @@ def update_setting(request):
                     if db_channel.chan_id in processed:
                         continue
                     processed.add(db_channel.chan_id)
-                    channel_point = point(db_channel)
-                    stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(chan_point=channel_point, base_fee_msat=db_channel.local_base_fee, fee_rate=(target/1000000), time_lock_delta=db_channel.local_cltv))
-                    old_fee_rate = db_channel.local_fee_rate
-                    db_channel.local_fee_rate = target
-                    db_channel.fees_updated = datetime.now()
-                    db_channel.save()
-                    Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Manual"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
+                    apply_outbound_fee(stub, db_channel, target)
                     processed_siblings, updated_siblings = sync_peer_outbound_fee(db_channel, target, stub=stub)
                     processed.update(processed_siblings)
                     total_synced += len(updated_siblings)
@@ -3374,7 +3312,7 @@ def update_setting(request):
                 messages.error(request, 'Invalid Request. Please try again. [' + key +']')
         else:
             messages.error(request, 'Invalid Request Form. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def update_closing(request):
@@ -3390,7 +3328,7 @@ def update_closing(request):
             messages.success(request, 'Updated closing costs for ' + str(funding_txid) + ':' + str(funding_index) + ' updated to a value of: ' + str(target))
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def update_keysend(request):
@@ -3404,7 +3342,7 @@ def update_keysend(request):
             messages.success(request, ('Marked' if db_invoice.is_revenue else 'Unmarked') + ' invoice ' + str(r_hash) + ' as revenue.')
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def add_avoid(request):
@@ -3417,7 +3355,7 @@ def add_avoid(request):
             messages.success(request, 'Successfully added node ' + str(pubkey) + ' to the avoid list.')
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def remove_avoid(request):
@@ -3429,7 +3367,7 @@ def remove_avoid(request):
             messages.success(request, 'Successfully removed node ' + str(pubkey) + ' from the avoid list.')
         else:
             messages.error(request, 'Invalid Request. Please try again.')
-    return redirect(request.META.get('HTTP_REFERER'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def get_fees(request):
@@ -3450,8 +3388,8 @@ def get_fees(request):
                     missing_fee.save()
                 except Exception as error:
                     messages.error(request, f"Error getting closure fees: {txid=} {error=}")
-                    return redirect(request.META.get('HTTP_REFERER'))
-    return redirect(request.META.get('HTTP_REFERER'))
+                    return redirect(request.META.get('HTTP_REFERER', '/'))
+    return redirect(request.META.get('HTTP_REFERER', '/'))
 
 @api_view(['POST'])
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
@@ -3871,7 +3809,6 @@ def node_info(request):
 
     limbo_balance = pending_channels.total_limbo_balance
     pending_open = None
-    pending_closed = None
     pending_force_closed = None
     waiting_for_close = None
     pending_open_balance = 0
@@ -3917,14 +3854,6 @@ def node_info(request):
             item['ar_max_cost'] = pending_changes.filter(funding_txid=funding_txid,output_index=output_index)[0].ar_max_cost if updated and pending_changes.filter(funding_txid=funding_txid,output_index=output_index)[0].ar_max_cost != None else cost_setting
             item['auto_fees'] = pending_changes.filter(funding_txid=funding_txid,output_index=output_index)[0].auto_fees if updated and pending_changes.filter(funding_txid=funding_txid,output_index=output_index)[0].auto_fees != None else (False if auto_fees == 0 else True)
             pending_open.append(item)
-    if pending_channels.pending_closing_channels:
-        target_resp = pending_channels.pending_closing_channels
-        pending_closed = []
-        for i in range(0,len(target_resp)):
-            pending_item = {'remote_node_pub':target_resp[i].channel.remote_node_pub,'channel_point':target_resp[i].channel.channel_point,'capacity':target_resp[i].channel.capacity,'local_balance':target_resp[i].channel.local_balance,'remote_balance':target_resp[i].channel.remote_balance,'local_chan_reserve_sat':target_resp[i].channel.local_chan_reserve_sat,
-            'remote_chan_reserve_sat':target_resp[i].channel.remote_chan_reserve_sat,'initiator':target_resp[i].channel.initiator,'commitment_type':target_resp[i].channel.commitment_type, 'local_commit_fee_sat': target_resp[i].commitments.local_commit_fee_sat,'limbo_balance':target_resp[i].limbo_balance,'closing_txid':target_resp[i].closing_txid}
-            pending_item.update(pending_channel_details(target_resp[i].channel.channel_point))
-            pending_closed.append(pending_item)
     if pending_channels.pending_force_closing_channels:
         target_resp = pending_channels.pending_force_closing_channels
         pending_force_closed = []
@@ -3965,7 +3894,6 @@ def node_info(request):
             'total': balances.total_balance + pending_open_balance + limbo_balance,
         },
         'pending_open': pending_open,
-        'pending_closed': pending_closed,
         'pending_force_closed': pending_force_closed,
         'waiting_for_close': waiting_for_close,
         'db_size': db_size
@@ -4231,7 +4159,7 @@ def api_balances(request):
             for i in range(0,len(target_resp)):
                 pending_open_balance += target_resp[i].channel.local_balance
         channels = Channels.objects.filter(is_open=1)
-        offchain_balance = channels.aggregate(Sum('local_balance'))['local_balance__sum'] + channels.aggregate(Sum('pending_outbound'))['pending_outbound__sum'] + pending_open_balance + limbo_balance
+        offchain_balance = (channels.aggregate(Sum('local_balance'))['local_balance__sum'] or 0) + (channels.aggregate(Sum('pending_outbound'))['pending_outbound__sum'] or 0) + pending_open_balance + limbo_balance
         target = {'total_balance':(balances.total_balance + offchain_balance),'offchain_balance':offchain_balance,'onchain_balance':balances.total_balance, 'confirmed_balance':balances.confirmed_balance, 'unconfirmed_balance':balances.unconfirmed_balance}
         return Response({'message': 'success', 'data':target})
     except Exception as e:
@@ -4296,7 +4224,7 @@ def pending_channels(request):
     try:
         stub = lnrpc.LightningStub(lnd_connect())
         response = stub.PendingChannels(ln.PendingChannelsRequest())
-        if response.pending_open_channels or response.pending_closing_channels or response.pending_force_closing_channels or response.waiting_close_channels or response.total_limbo_balance:
+        if response.pending_open_channels or response.pending_force_closing_channels or response.waiting_close_channels or response.total_limbo_balance:
             target = {}
             if response.pending_open_channels:
                 target_resp = response.pending_open_channels
@@ -4308,15 +4236,6 @@ def pending_channels(request):
                     'remote_chan_reserve_sat':target_resp[i].channel.remote_chan_reserve_sat,'initiator':target_resp[i].channel.initiator,'commitment_type':target_resp[i].channel.commitment_type,'commit_fee':target_resp[i].commit_fee,'commit_weight':target_resp[i].commit_weight,'fee_per_kw':target_resp[i].fee_per_kw}
                     pending_open_channels.append(pending_item)
                 target.update({'pending_open': pending_open_channels})
-            if response.pending_closing_channels:
-                target_resp = response.pending_closing_channels
-                pending_closing_channels = []
-                for i in range(0,len(target_resp)):
-                    pending_item = {'remote_node_pub':target_resp[i].channel.remote_node_pub,'channel_point':target_resp[i].channel.channel_point,'capacity':target_resp[i].channel.capacity,'local_balance':target_resp[i].channel.local_balance,'remote_balance':target_resp[i].channel.remote_balance,'local_chan_reserve_sat':target_resp[i].channel.local_chan_reserve_sat,
-                    'remote_chan_reserve_sat':target_resp[i].channel.remote_chan_reserve_sat,'initiator':target_resp[i].channel.initiator,'commitment_type':target_resp[i].channel.commitment_type,'limbo_balance':target_resp[i].limbo_balance}
-                    pending_item.update(pending_channel_details(target_resp[i].channel.channel_point))
-                    pending_closing_channels.append(pending_item)
-                target.update({'pending_closing':pending_closing_channels})
             if response.pending_force_closing_channels:
                 target_resp = response.pending_force_closing_channels
                 pending_force_closing_channels = []
@@ -4394,24 +4313,27 @@ def chan_policy(request):
                 stub = lnrpc.LightningStub(lnd_connect())
                 version = stub.GetInfo(ln.GetInfoRequest()).version
                 kwargs = {'chan_point':channel_point, 'base_fee_msat':base_fee_msat, 'fee_rate':fee_rate, 'time_lock_delta':time_lock_delta, 'min_htlc_msat_specified':True, 'min_htlc_msat':min_htlc_msat, 'max_htlc_msat':max_htlc_msat}
-                if serializer.validated_data['inbound_base_fee'] or serializer.validated_data['inbound_fee_rate']:
+                # An explicitly sent inbound fee goes to LND even when it is 0 (that is how
+                # it gets reset); otherwise a new outbound rate re-applies the inbound offset.
+                offset_target = None
+                if serializer.validated_data['inbound_base_fee'] is not None or serializer.validated_data['inbound_fee_rate'] is not None:
                     if float(version[:4]) >= 0.18:
                         kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat = inbound_base_fee_msat if inbound_base_fee_msat else 0, fee_rate_ppm = inbound_fee_rate if inbound_fee_rate else 0)
                     else:
                         return Response({'error': f'LND version too low to set inbound fees, update to v0.18+'})
+                elif serializer.validated_data['fee_rate'] is not None and float(version[:4]) >= 0.18:
+                    offset_target = offset_inbound_fee(db_channel, serializer.validated_data['fee_rate'])
+                    if offset_target is not None:
+                        kwargs['inbound_fee'] = ln.InboundFee(base_fee_msat=db_channel.local_inbound_base_fee if db_channel.local_inbound_base_fee else 0, fee_rate_ppm=offset_target)
                 stub.UpdateChannelPolicy(ln.PolicyUpdateRequest(**kwargs))
                 if serializer.validated_data['base_fee'] is not None:
                     db_channel.local_base_fee = serializer.validated_data['base_fee']
                     db_channel.save()
                     return_response['base_fee'] = serializer.validated_data['base_fee']
                 if serializer.validated_data['fee_rate'] is not None:
-                    old_fee_rate = db_channel.local_fee_rate
                     new_rate = serializer.validated_data['fee_rate']
-                    db_channel.local_fee_rate = new_rate
-                    db_channel.fees_updated = datetime.now()
-                    db_channel.save()
+                    record_outbound_fee(db_channel, new_rate, offset_target)
                     return_response['fee_rate'] = new_rate
-                    Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Manual"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
                     _, updated_siblings = sync_peer_outbound_fee(db_channel, new_rate, stub=stub)
                     if updated_siblings:
                         return_response['synced_siblings'] = len(updated_siblings)
@@ -4443,7 +4365,7 @@ def chan_policy(request):
                 stub.UpdateChanStatus(lnr.UpdateChanStatusRequest(chan_point=channel_point, action=0)) if serializer.validated_data['disabled'] == 0 else stub.UpdateChanStatus(lnr.UpdateChanStatusRequest(chan_point=channel_point, action=1))
                 db_channel.local_disabled = False if serializer.validated_data['disabled'] == 0 else True
                 db_channel.save()
-                return_response['disabled'] = serializer.validated_data['base_fee']
+                return_response['disabled'] = serializer.validated_data['disabled']
         except Exception as e:
             error = str(e)
             details_index = error.find('details =') + 11

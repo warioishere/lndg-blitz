@@ -21,28 +21,28 @@ from gui.node_cache import get_node_info_cached
 import af
 from jobs_emergency import emergency_forward_check
 
-CHANNEL_UPDATE_FIELDS = [
+# update_channels writes three groups of channel columns differently, so that a
+# UI / auto-fees / rebalancer write made while a sync run is in progress is never
+# reverted by the sync's in-memory snapshot:
+# - LND state, always written:
+CHANNEL_SYNC_FIELDS = [
     'remote_pubkey', 'short_chan_id', 'funding_txid', 'output_index', 'capacity',
     'local_balance', 'remote_balance', 'unsettled_balance', 'local_commit',
     'local_chan_reserve', 'num_updates', 'initiator', 'alias', 'total_sent',
     'total_received', 'private', 'pending_outbound', 'pending_inbound',
-    'htlc_count', 'local_base_fee', 'local_inbound_base_fee',
-    'inbound_offset', 'local_disabled',
-    'local_cltv', 'local_min_htlc_msat', 'local_max_htlc_msat', 'remote_base_fee',
-    'remote_fee_rate', 'remote_inbound_base_fee', 'remote_inbound_fee_rate',
-    'remote_disabled', 'remote_cltv', 'remote_min_htlc_msat',
+    'htlc_count', 'remote_base_fee', 'remote_fee_rate', 'remote_inbound_base_fee',
+    'remote_inbound_fee_rate', 'remote_disabled', 'remote_cltv', 'remote_min_htlc_msat',
     'remote_max_htlc_msat', 'push_amt', 'close_address', 'is_active', 'is_open',
-    'last_update', 'auto_rebalance', 'ar_amt_target', 'ar_in_target',
-    'ar_out_target', 'ar_max_cost', 'ar_source', 'ar_source_ppm_diff',
-    'auto_fees', 'notes'
-    # Intentionally NOT in this list (these are owned by UI/AF code paths and
-    # would be clobbered by the bulk_update's stale in-memory snapshot if
-    # included here):
-    #   local_fee_rate          -- UI / auto_fees / jobs that explicitly push
-    #   local_inbound_fee_rate  -- UI / inbound_offsets
-    #   offset_updated          -- inbound_offsets job
-    #   fees_updated            -- UI / auto_fees / jobs that explicitly push
+    'last_update',
 ]
+# - our own policy, written only while the DB still holds what the sync loaded
+#   (sync_local_policy), so external changes (e.g. lncli) are picked up:
+LOCAL_POLICY_FIELDS = [
+    'local_base_fee', 'local_fee_rate', 'local_inbound_base_fee', 'local_inbound_fee_rate',
+    'local_cltv', 'local_min_htlc_msat', 'local_max_htlc_msat', 'local_disabled',
+]
+# - settings owned by the UI, written only to fill an unset (0) default:
+DEFAULT_FIELDS = ['ar_out_target', 'ar_in_target', 'ar_amt_target', 'ar_max_cost']
 
 
 def apply_channel_defaults(ch):
@@ -83,6 +83,10 @@ def apply_channel_defaults(ch):
             cost_setting = 65
         ch.ar_max_cost = cost_setting
 
+
+def keysend_message(records):
+    # Sender-controlled bytes: drop invalid UTF-8 and NUL, both rejected by Postgres.
+    return records[34349334].decode('utf-8', errors='ignore').replace('\x00', '')[:1000] if 34349334 in records else None
 
 def update_payments(stub):
     self_pubkey = stub.GetInfo(ln.GetInfoRequest()).identity_pubkey
@@ -148,7 +152,7 @@ def update_payment(stub, payment, self_pubkey):
                             db_payment.chan_out_alias = 'MPP'
                     if hop_count == total_hops and 5482373484 in hop.custom_records and db_payment.keysend_preimage is None:
                         records = hop.custom_records
-                        message = records[34349334].decode('utf-8', errors='ignore')[:1000] if 34349334 in records else None
+                        message = keysend_message(records)
                         db_payment.keysend_preimage = records[5482373484].hex()
                         db_payment.message = message
                     if hop_count == total_hops and hop.pub_key == self_pubkey and db_payment.rebal_chan is None:
@@ -192,7 +196,7 @@ def update_invoice(stub, invoice, db_invoice):
             alias = Channels.objects.filter(chan_id=chan_in_id)[0].alias if Channels.objects.filter(chan_id=chan_in_id).exists() else None
             records = invoice.htlcs[0].custom_records
             keysend_preimage = records[5482373484].hex() if 5482373484 in records else None
-            message = records[34349334].decode('utf-8', errors='ignore')[:1000] if 34349334 in records else None
+            message = keysend_message(records)
             if 34349337 in records and 34349339 in records and 34349343 in records and 34349334 in records:
                 signerstub = lnsigner.SignerStub(lnd_connect())
                 self_pubkey = stub.GetInfo(ln.GetInfoRequest()).identity_pubkey
@@ -287,7 +291,6 @@ def disconnectpeer(stub, peer):
         print(f"{datetime.now().strftime('%c')} : [Data] : Error disconnecting peer {peer.alias} {peer.pubkey}: {str(e)}")
 
 def update_channels(stub):
-    counter = 0
     chan_list = []
     channels_to_create = []
     channels_to_update = []
@@ -301,6 +304,7 @@ def update_channels(stub):
         is_new = False
         if Channels.objects.filter(chan_id=channel.chan_id).exists():
             db_channel = Channels.objects.filter(chan_id=channel.chan_id)[0]
+            loaded = {f: getattr(db_channel, f) for f in LOCAL_POLICY_FIELDS + DEFAULT_FIELDS}
             pending_channel = None
             peer_alias = Peers.objects.filter(pubkey=channel.remote_pubkey).values_list('alias', flat=True).first()
             if peer_alias is not None and peer_alias != db_channel.alias:
@@ -525,34 +529,42 @@ def update_channels(stub):
             if pending_channel.auto_fees is not None:
                 db_channel.auto_fees = pending_channel.auto_fees
             pending_channel.delete()
-        if old_fee_rate is not None and old_fee_rate != local_policy.fee_rate_milli_msat:
-            print(f"{datetime.now().strftime('%c')} : [Data] : Ext fee change detected on {db_channel.chan_id} for peer {db_channel.alias}: fee updated from {old_fee_rate} to {db_channel.local_fee_rate}")
-            #External Fee change detected, update auto fee log
-            db_channel.fees_updated = datetime.now()
-            Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Ext"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
         apply_channel_defaults(db_channel)
         if is_new:
+            if old_fee_rate is not None and old_fee_rate != local_policy.fee_rate_milli_msat:
+                log_ext_fee_change(db_channel, old_fee_rate)
             channels_to_create.append(db_channel)
         else:
+            sync_local_policy(db_channel, loaded)
+            for f in DEFAULT_FIELDS:
+                if getattr(db_channel, f) != loaded[f]:
+                    Channels.objects.filter(chan_id=db_channel.chan_id, **{f: loaded[f]}).update(**{f: getattr(db_channel, f)})
             channels_to_update.append(db_channel)
-        counter += 1
         chan_list.append(channel.chan_id)
-    records = Channels.objects.filter(is_open=True).count()
-    if records > counter:
-        channels = list(Channels.objects.filter(is_open=True).exclude(chan_id__in=chan_list))
-        for channel in channels:
-            channel.last_update = datetime.now()
-            channel.is_active = False
-            channel.is_open = False
-            apply_channel_defaults(channel)
-        channels_to_update.extend(channels)
+    Channels.objects.filter(is_open=True).exclude(chan_id__in=chan_list).update(is_active=False, is_open=False, last_update=datetime.now())
 
     if pending_htlcs_to_create:
         PendingHTLCs.objects.bulk_create(pending_htlcs_to_create)
     if channels_to_create:
         Channels.objects.bulk_create(channels_to_create)
     if channels_to_update:
-        Channels.objects.bulk_update(channels_to_update, CHANNEL_UPDATE_FIELDS)
+        Channels.objects.bulk_update(channels_to_update, CHANNEL_SYNC_FIELDS)
+
+def log_ext_fee_change(db_channel, old_fee_rate):
+    print(f"{datetime.now().strftime('%c')} : [Data] : Ext fee change detected on {db_channel.chan_id} for peer {db_channel.alias}: fee updated from {old_fee_rate} to {db_channel.local_fee_rate}")
+    Autofees(chan_id=db_channel.chan_id, peer_alias=db_channel.alias, setting=(f"Ext"), old_value=old_fee_rate, new_value=db_channel.local_fee_rate).save()
+
+def sync_local_policy(db_channel, loaded):
+    # Persist the policy LND reports for an existing channel only while the DB still
+    # holds what this sync loaded: a UI / auto-fees write made meanwhile wins.
+    current = {f: getattr(db_channel, f) for f in LOCAL_POLICY_FIELDS}
+    old = {f: loaded[f] for f in LOCAL_POLICY_FIELDS}
+    if current == old:
+        return
+    fee_changed = current['local_fee_rate'] != old['local_fee_rate']
+    values = dict(current, fees_updated=datetime.now()) if fee_changed else current
+    if Channels.objects.filter(chan_id=db_channel.chan_id, **old).update(**values) and fee_changed:
+        log_ext_fee_change(db_channel, old['local_fee_rate'])
 
 def update_peers(stub):
     peer_list = []
@@ -618,7 +630,7 @@ def network_links():
 def get_tx_fees(txid):
     base_url = network_links() + ('/testnet' if settings.LND_NETWORK == 'testnet' else '') + '/api/tx/'
     try:
-        request_data = get(base_url + txid).json()
+        request_data = get(base_url + txid, timeout=10).json()
         fee = request_data['fee']
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Data] : Error getting closure fees for {txid}: {str(e)}")
@@ -773,8 +785,9 @@ def auto_fees(stub):
                         print(f"{datetime.now().strftime('%c')} : [Data] : Updating outbound fees for channel {str(target_channel['chan_id'])} to a value of: {str(target_channel['new_rate'])}")
                         channel.local_fee_rate = target_channel['new_rate']
                         Autofees(chan_id=channel.chan_id, peer_alias=channel.alias, setting=(f"AF [ {target_channel['net_routed_7day']}:{target_channel['in_percent']}:{target_channel['out_percent']} ]"), old_value=target_channel['local_fee_rate'], new_value=target_channel['new_rate']).save()
-                    channel.fees_updated = datetime.now()
-                    channel.save()
+                    # Targeted write: a full save() would put back the rest of the row as
+                    # loaded above, reverting any UI change made in the meantime.
+                    Channels.objects.filter(pk=channel.pk).update(local_fee_rate=channel.local_fee_rate, local_inbound_fee_rate=channel.local_inbound_fee_rate, fees_updated=datetime.now())
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Data] : Error processing auto_fees: {str(e)}")
 
@@ -795,14 +808,11 @@ def inbound_offsets(stub):
     if float(version[:4]) < 0.18:
         return
     channels = Channels.objects.filter(is_open=True).exclude(inbound_offset=0)
-    # When curve mode handles inbound fees, skip channels managed by autofees
-    curve_mode = False
-    af_inbound = False
-    if LocalSettings.objects.filter(key='AF-CurveMode').exists():
-        curve_mode = LocalSettings.objects.filter(key='AF-CurveMode')[0].value == '1'
-    if LocalSettings.objects.filter(key='AF-InboundFees').exists():
-        af_inbound = LocalSettings.objects.filter(key='AF-InboundFees')[0].value == '1'
-    if curve_mode and af_inbound:
+    # Auto-fees owns the inbound fee of its channels while it runs with inbound fees
+    # on (curve and legacy mode alike), so leave those channels to it.
+    af_enabled = LocalSettings.objects.filter(key='AF-Enabled', value='1').exists()
+    af_inbound = LocalSettings.objects.filter(key='AF-InboundFees', value='1').exists()
+    if af_enabled and af_inbound:
         channels = channels.filter(auto_fees=False)
     for ch in channels:
         # Re-read from DB right before the LND RPC so a concurrent UI fee change
@@ -903,18 +913,12 @@ def emergency_fee_job(stub):
     else:
         LocalSettings(key='EP-Enabled', value='0').save()
         return
-    default_target = int(LocalSettings.objects.filter(key='EP-DefaultTarget').first().value)
-    default_inc = float(LocalSettings.objects.filter(key='EP-IncreasePct').first().value)
-    default_cooldown = int(LocalSettings.objects.filter(key='EP-Cooldown').first().value)
     channels = Channels.objects.filter(is_open=True, ep_enabled=True)
     for ch in channels:
-        target = ch.ep_target if ch.ep_target is not None else default_target
-        inc_pct = ch.ep_inc_pct if ch.ep_inc_pct is not None else default_inc
-        cooldown = ch.ep_cooldown if ch.ep_cooldown is not None else default_cooldown
         percent = (ch.local_balance + ch.pending_outbound) * 100 / ch.capacity if ch.capacity else 0
-        if percent < target:
-            if not ch.ep_updated or (datetime.now() - ch.ep_updated).total_seconds() >= cooldown * 60:
-                new_rate = int(ch.local_fee_rate * (1 + inc_pct/100))
+        if percent < ch.ep_target:
+            if not ch.ep_updated or (datetime.now() - ch.ep_updated).total_seconds() >= ch.ep_cooldown * 60:
+                new_rate = int(ch.local_fee_rate * (1 + ch.ep_inc_pct/100))
                 channel_point = ln.ChannelPoint()
                 channel_point.funding_txid_bytes = bytes.fromhex(ch.funding_txid)
                 channel_point.funding_txid_str = ch.funding_txid
@@ -926,10 +930,8 @@ def emergency_fee_job(stub):
                         fee_rate=(new_rate/1000000),
                         time_lock_delta=ch.local_cltv))
                     Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting='EP', old_value=ch.local_fee_rate, new_value=new_rate).save()
-                    ch.local_fee_rate = new_rate
-                    ch.fees_updated = datetime.now()
-                    ch.ep_updated = datetime.now()
-                    ch.save()
+                    now = datetime.now()
+                    Channels.objects.filter(pk=ch.pk).update(local_fee_rate=new_rate, fees_updated=now, ep_updated=now)
                 except Exception as e:
                     print(f"{datetime.now().strftime('%c')} : [Data] : Error updating emergency fee for {ch.chan_id}: {str(e)}")
 
@@ -1003,9 +1005,9 @@ def failed_htlc_boost_job(stub):
             Q(amount__gt=0)
         ).count()
 
-        # Mark that we've checked this channel
-        ch.htlc_boost_checked = datetime.now()
-        ch.save()
+        # Mark that we've checked this channel (targeted write, like the fee update
+        # below: a full save() would put back the whole row as loaded at loop start)
+        Channels.objects.filter(pk=ch.pk).update(htlc_boost_checked=datetime.now())
 
         # If threshold met, apply boost
         if failed_htlc_count >= boost_threshold:
@@ -1035,9 +1037,7 @@ def failed_htlc_boost_job(stub):
                 Autofees(chan_id=ch.chan_id, peer_alias=ch.alias, setting='HTLC Boost Job', old_value=ch.local_fee_rate, new_value=new_rate).save()
 
                 # Update channel
-                ch.local_fee_rate = new_rate
-                ch.fees_updated = datetime.now()
-                ch.save()
+                Channels.objects.filter(pk=ch.pk).update(local_fee_rate=new_rate, fees_updated=datetime.now())
             except Exception as e:
                 print(f"{datetime.now().strftime('%c')} : [Data] : Error applying HTLC boost to {ch.chan_id}: {str(e)}")
 
@@ -1126,6 +1126,7 @@ def _probe_with_binary_search(routerstub, source_chan_id, hop_pubkeys, cltv_delt
     amount = target_amount_sat
     best_hex = None
     best_fee_ppm = None
+    fee_retried = False
     for _step in range(max_steps):
         if amount <= 0:
             break
@@ -1164,8 +1165,9 @@ def _probe_with_binary_search(routerstub, source_chan_id, hop_pubkeys, cltv_delt
             amount = (good + bad) // 2
         elif status == 'fee':
             # Retry same amount once; if it persists, abort to avoid loops
-            if _step >= max_steps - 1:
+            if fee_retried:
                 break
+            fee_retried = True
             continue
         else:
             break

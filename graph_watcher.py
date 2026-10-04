@@ -8,6 +8,7 @@ django.setup()
 
 from gui.lnd_deps import lightning_pb2 as ln
 from gui.lnd_deps import lightning_pb2_grpc as lnrpc
+from gui.lnd_deps import router_pb2_grpc as lnrouter
 from gui.lnd_deps.lnd_connect import get_shared_channel, close_shared_channel
 from gui.models import Channels, LocalSettings, Peers, GraphEvent, Rebalancer, GraphProbeLog
 from gui.node_cache import get_node_info_cached
@@ -89,7 +90,9 @@ def _trigger_probe(stub, target_pubkey, other_pubkey=None, other_fee_ppm=None, c
     print(f"{datetime.now().strftime('%c')} : [GraphWatcher] :   trying {sources_tried} of {len(outbound_cans)} outbound sources, "
           f"budget = {ch.local_fee_rate} * {ch.ar_max_cost}% = {budget_ppm} ppm")
 
-    total_new, total_existing, total_errors, target_details = probe_targets(stub, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target)
+    routerstub = lnrouter.RouterStub(get_shared_channel())
+    self_pubkey = stub.GetInfo(ln.GetInfoRequest()).identity_pubkey
+    total_new, total_existing, total_errors, target_details = probe_targets(stub, routerstub, self_pubkey, targets, outbound_cans, source_fee_map, max_fee_rate, max_per_target)
 
     # Check which routes go via the new peer
     from gui.models import RebalanceRoute

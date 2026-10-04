@@ -66,10 +66,7 @@ def main(channels):
     excess_boost_enabled = get_local_setting('AF-ExcessBoostOn', '0', str) == '1'
     peer_rate_check = get_local_setting('AF-PeerRateCheck', '0', str) == '1'
     peer_rate_limit = get_local_setting('AF-PeerRateLimit', 0, int)
-    try:
-        bypass_peer_rate_on_htlc = get_local_setting('AF-BypassPeerHTLC', '0', str) == '1'
-    except:
-        bypass_peer_rate_on_htlc = False
+    bypass_peer_rate_on_htlc = get_local_setting('AF-BypassPeerHTLC', '0', str) == '1'
     flow_scale = get_local_setting('AF-FlowScale', 1.0, float)
     max_step = get_local_setting('AF-MaxStep', 100, int)
     curve_mode = get_local_setting('AF-CurveMode', '1', str) == '1'
@@ -386,7 +383,7 @@ def main(channels):
             if excess_boost_enabled:
                 adj = int(adj * excess_boost)
             return clamp_step(adj)
-        elif row['overall_out_percent'] < excess_limit:
+        else:
             if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
                 adj = -3 * multiplier
                 if excess_boost_enabled:
@@ -396,24 +393,6 @@ def main(channels):
                 scale = 1 + abs(flow) * flow_scale
                 base = (2 * multiplier if flow > 0 else -5 * multiplier) * HIGH_FLOW_FACTOR
                 adj = base * scale
-            else:
-                adj = 0
-            return clamp_step(adj)
-        else:
-            if row['total_amt_routed_in_7day'] + row['total_amt_routed_out_7day'] == 0:
-                adj = -5 * multiplier
-                if excess_boost_enabled:
-                    adj = int(adj * excess_boost)
-            elif (
-                row['group_net_routed_7day'] < -1
-                and row['total_revenue_assist_7day'] > row['total_revenue_7day'] * 10
-            ):
-                flow = abs(clamp_flow(row['group_net_routed_7day']))
-                scale = 1 + flow * flow_scale
-                adj = -5 * multiplier * HIGH_FLOW_FACTOR
-                if excess_boost_enabled:
-                    adj = int(adj * excess_boost)
-                adj *= scale
             else:
                 adj = 0
             return clamp_step(adj)

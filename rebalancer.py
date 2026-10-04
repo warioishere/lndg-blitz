@@ -170,32 +170,6 @@ FAILURE_CODE_NAMES = {
     23: "MPP_TIMEOUT",
 }
 
-FAILURE_DETAIL_NAMES = {
-    0: "UNKNOWN",
-    1: "NO_DETAIL",
-    2: "ONION_DECODE",
-    3: "LINK_NOT_ELIGIBLE",
-    4: "ON_CHAIN_TIMEOUT",
-    5: "HTLC_EXCEEDS_MAX",
-    6: "INSUFFICIENT_BALANCE",
-    7: "INCOMPLETE_FORWARD",
-    8: "HTLC_ADD_FAILED",
-    9: "FORWARDS_DISABLED",
-    10: "INVOICE_CANCELED",
-    11: "INVOICE_UNDERPAID",
-    12: "INVOICE_EXPIRY_TOO_SOON",
-    13: "INVOICE_NOT_OPEN",
-    14: "MPP_INVOICE_TIMEOUT",
-    15: "ADDRESS_MISMATCH",
-    16: "SET_TOTAL_MISMATCH",
-    17: "SET_TOTAL_TOO_LOW",
-    18: "SET_OVERPAID",
-    19: "UNKNOWN_INVOICE",
-    20: "INVALID_KEYSEND",
-    21: "MPP_IN_PROGRESS",
-    22: "CIRCULAR_ROUTE",
-}
-
 PROBE_STEPS = 5
 MIN_PROBE_AMOUNT = 69420
 
@@ -1125,17 +1099,11 @@ async def run_rebalancer(rebalance, worker):
                         if failure:
                             code_num = getattr(failure, "code", None)
                             reason = FAILURE_CODE_NAMES.get(code_num, code_num)
-                            detail_num = getattr(failure, "failure_detail", None)
-                            if detail_num is None:
-                                detail = "not set"
-                            else:
-                                detail = FAILURE_DETAIL_NAMES.get(detail_num, detail_num)
                             fsi = getattr(failure, "failure_source_index", None)
                         else:
                             reason = "no-details"
-                            detail = "not set"
                         print(
-                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route failed via {sr_label} - code: {reason} - detail: {detail} - failure_hop: {fsi}"
+                            f"{datetime.now().strftime('%c')} : [Rebalancer] : Saved route failed via {sr_label} - code: {reason} - failure_hop: {fsi}"
                         )
                         _record_route_failure(route_msg, failure)
                         await update_route(
@@ -1322,7 +1290,10 @@ async def run_rebalancer(rebalance, worker):
                         elif payment_response.status == 0:
                             rebalance.status = 400
         except Exception as e:
-            if str(e.code()) == 'StatusCode.DEADLINE_EXCEEDED':
+            # Only gRPC errors carry code(); anything else (e.g. a bad outgoing_chan_ids
+            # value) must still end as 400, or the record stays pending and is re-run forever.
+            code = e.code() if callable(getattr(e, 'code', None)) else None
+            if str(code) == 'StatusCode.DEADLINE_EXCEEDED':
                 rebalance.status = 408
             else:
                 rebalance.status = 400
@@ -1368,7 +1339,8 @@ async def run_rebalancer(rebalance, worker):
                     if remaining_drain_sat < 1000:
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : RapidFire skipped for {original_alias} — channel already at/near ar_in_target (remaining drain {remaining_drain_sat} sats)")
             # For failed rebalances, try in rapid fire with reduced balances until give up.
-            elif rebalance.status > 2 and rebalance.value > 69420:
+            # 406 (no usable source) does not depend on the amount, a smaller retry cannot help
+            elif rebalance.status > 2 and rebalance.status != 406 and rebalance.value > 69420:
                 #Previous Rapidfire with increased value failed, try with lower value up to 69420.
                 if rebalance.duration > 1:
                     next_value = await estimate_liquidity ( payment_response )
@@ -1423,9 +1395,8 @@ def update_channels(stub, incoming_chan_id, outgoing_chan_id):
             if db_channel:
                 old_local = db_channel.local_balance
                 old_remote = db_channel.remote_balance
-                db_channel.local_balance = incoming_channel.local_balance
-                db_channel.remote_balance = incoming_channel.remote_balance
-                db_channel.save()
+                # Targeted write: a full save() could revert a concurrent UI / jobs write.
+                Channels.objects.filter(pk=db_channel.pk).update(local_balance=incoming_channel.local_balance, remote_balance=incoming_channel.remote_balance)
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : update_channels: Incoming chan {incoming_chan_id} - local: {old_local}->{incoming_channel.local_balance}, remote: {old_remote}->{incoming_channel.remote_balance}")
         # Outgoing channel update
         outgoing_channel = next((c for c in channel if c.chan_id == outgoing_chan_id), None)
@@ -1434,9 +1405,7 @@ def update_channels(stub, incoming_chan_id, outgoing_chan_id):
             if db_channel:
                 old_local = db_channel.local_balance
                 old_remote = db_channel.remote_balance
-                db_channel.local_balance = outgoing_channel.local_balance
-                db_channel.remote_balance = outgoing_channel.remote_balance
-                db_channel.save()
+                Channels.objects.filter(pk=db_channel.pk).update(local_balance=outgoing_channel.local_balance, remote_balance=outgoing_channel.remote_balance)
                 print(f"{datetime.now().strftime('%c')} : [Rebalancer] : update_channels: Outgoing chan {outgoing_chan_id} - local: {old_local}->{outgoing_channel.local_balance}, remote: {old_remote}->{outgoing_channel.remote_balance}")
     except Exception as e:
         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Error updating channel balances: {str(e)}")
@@ -1604,14 +1573,12 @@ def auto_enable():
                         pass
                     elif oapD > (iapD*1.10) and inbound_percent > 75 and peer_channel.auto_rebalance == False:
                         #print('Case 2: Enable AR - o7D > i7D AND Inbound Liq > 75%')
-                        peer_channel.auto_rebalance = True
-                        peer_channel.save()
+                        Channels.objects.filter(pk=peer_channel.pk).update(auto_rebalance=True)
                         Autopilot(chan_id=peer_channel.chan_id, peer_alias=peer_channel.alias, setting='Enabled', old_value=0, new_value=1).save()
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Auto Pilot Enabled for {peer_channel.alias} {peer_channel.chan_id}: {oapD} {iapD}")
                     elif oapD < (iapD*1.10) and outbound_percent > 75 and peer_channel.auto_rebalance == True:
                         #print('Case 3: Disable AR - o7D < i7D AND Outbound Liq > 75%')
-                        peer_channel.auto_rebalance = False
-                        peer_channel.save()
+                        Channels.objects.filter(pk=peer_channel.pk).update(auto_rebalance=False)
                         Autopilot(chan_id=peer_channel.chan_id, peer_alias=peer_channel.alias, setting='Enabled', old_value=1, new_value=0).save()
                         print(f"{datetime.now().strftime('%c')} : [Rebalancer] : Auto Pilot Disabled for {peer_channel.alias} {peer_channel.chan_id}: {oapD} {iapD}" )
                     elif oapD < (iapD*1.10) and inbound_percent > 75:

@@ -266,23 +266,6 @@
     </table>
   </div>
 </div>
-<div id="pending_closed_container" style="display:none" class="w3-container w3-padding-small">
-  <table class="w3-table-all w3-centered w3-hoverable">
-    <thead>
-      <tr>
-        <th>Channel ID</th>
-        <th>Peer Alias</th>
-        <th>Capacity</th>
-        <th>Local Balance</th>
-        <th>Remote Balance</th>
-        <th>Balance In Limbo</th>
-        <th>Local Commit Fee</th>
-        <th width=20%>Closing TX</th>
-      </tr>
-    </thead>
-    <tbody id="pending_closed"></tbody>
-  </table>
-</div>
 <div id="pending_force_closed_container" style="display:none" class="w3-container w3-padding-small">
   <table class="w3-table-all w3-centered w3-hoverable">
     <thead>
@@ -983,7 +966,6 @@
     let [activeSum, privateSum, inactiveSum] = [build_active(active, forwards_sum), build_private(private), build_inactive(inactive)]
     update_summary(node_info, payments7d, onchain_task, closures_task, activeSum, inactiveSum, privateSum, forwards_summary, inv_rev_task)
     build('Pending Open', pending_open_template, node_info.pending_open||[])
-    build('Pending Closed', pending_closed_template, node_info.pending_closed||[])
     build('Waiting For Close', pending_closed_template, node_info.waiting_for_close||[])
     build('Pending Force Closed', pending_fclosed_template, node_info.pending_force_closed||[])
     build_routed((await forwardsList_task).results)

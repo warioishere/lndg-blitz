@@ -13,8 +13,6 @@ def mirror_peer_fee_targets(channels_df: DataFrame) -> DataFrame:
 
         controller_idx = group['out_percent'].idxmin()
         follower_idxs = group.index.difference([controller_idx])
-        if follower_idxs.empty:
-            continue
 
         controller_new_rate = channels_df.at[controller_idx, 'new_rate']
         controller_new_inbound_rate = (

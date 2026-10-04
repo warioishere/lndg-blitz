@@ -100,7 +100,7 @@
       const status = "{{ status }}"
       const rebalsTable = byId('rebalsTable_'+status)
       const lastId = rebalsTable.tBodies[1].lastChild.objId
-      const rebals_task = GET('rebalancer', {data: {last_hop_pubkey: "{{ last_hop_pubkey }}", id__lt: lastId, status: status, limit: "{{ load_count }}"} })
+      const rebals_task = GET('rebalancer', {data: {last_hop_pubkey: "{% if last_hop_pubkey %}{{last_hop_pubkey}}{%else%}{{request.GET.last_hop_pubkey}}{%endif%}", id__lt: lastId, status: status, limit: "{{ load_count }}"} })
       build_rebals(rebals_task, rebalsTable, status)
     }
     async function build_rebals(rebals_task, rebalsTable, status){
