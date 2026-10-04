@@ -119,7 +119,7 @@ def channels(request):
         forwards = Forwards.objects.filter(forward_date__gte=filter_30day)
         payments = Payments.objects.filter(status=2, creation_date__gte=filter_30day, rebal_chan__isnull=False)
         invoices = Invoices.objects.filter(state=1, r_hash__in=payments.values_list('payment_hash'))
-        channels = Channels.objects.filter(is_open=True, private=False)
+        channels = Channels.objects.filter(is_open=True, private=False).order_by('chan_id')
         channels_df = DataFrame.from_records(channels.values())
         if channels_df.shape[0] > 0:
             forwards_df_30d = DataFrame.from_records(forwards.values())
@@ -210,7 +210,7 @@ def channels(request):
             apy_7day = 0
             apy_30day = 0
         context = {
-            'channels': [] if channels_df.empty else channels_df.sort_values(by=['cv_30day'], ascending=False).to_dict(orient='records'),
+            'channels': [] if channels_df.empty else channels_df.sort_values(by=['cv_30day'], ascending=False, kind='stable').to_dict(orient='records'),
             'apy_7day': apy_7day,
             'apy_30day': apy_30day,
             'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
@@ -224,10 +224,10 @@ def channels(request):
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def fees(request):
     if request.method == 'GET':
-        channels = Channels.objects.filter(is_open=True, private=False)
+        channels = Channels.objects.filter(is_open=True, private=False).order_by('chan_id')
         results_df = af.main(channels)
         context = {
-            'channels': [] if results_df.empty else results_df.sort_values(by=['out_percent']).to_dict(orient='records'),
+            'channels': [] if results_df.empty else results_df.sort_values(by=['out_percent'], kind='stable').to_dict(orient='records'),
             'local_settings': get_local_settings('AF-'),
             'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
             'graph_links': graph_links(),
@@ -279,7 +279,7 @@ def full_fee_adj(request):
 @is_login_required(login_required(login_url='/lndg-admin/login/?next=/'), settings.LOGIN_REQUIRED)
 def advanced(request):
     if request.method == 'GET':
-        channels = Channels.objects.filter(is_open=True).annotate(outbound_percent=((Sum('local_balance')+Sum('pending_outbound'))*1000)/Sum('capacity'), inbound_percent=((Sum('remote_balance')+Sum('pending_inbound'))*1000)/Sum('capacity')).order_by('-is_active', 'outbound_percent')
+        channels = Channels.objects.filter(is_open=True).annotate(outbound_percent=((Sum('local_balance')+Sum('pending_outbound'))*1000)/Sum('capacity'), inbound_percent=((Sum('remote_balance')+Sum('pending_inbound'))*1000)/Sum('capacity')).order_by('-is_active', 'outbound_percent', 'chan_id')
         channels_df = DataFrame.from_records(channels.values())
         if channels_df.shape[0] > 0:
             channels_df['out_percent'] = channels_df.apply(lambda row: int(round(row['outbound_percent']/10, 0)), axis=1)
@@ -659,7 +659,7 @@ def closures(request):
                     'remote_chan_reserve_sat':target_resp[i].channel.remote_chan_reserve_sat,'initiator':target_resp[i].channel.initiator,'commitment_type':target_resp[i].channel.commitment_type, 'local_commit_fee_sat': target_resp[i].commitments.local_commit_fee_sat, 'limbo_balance':target_resp[i].limbo_balance, 'closing_txid':target_resp[i].closing_txid}
                     pending_item.update(pending_channel_details(target_resp[i].channel.channel_point))
                     waiting_for_close.append(pending_item)
-            closures_df = DataFrame.from_records(Closures.objects.all().values())
+            closures_df = DataFrame.from_records(Closures.objects.order_by('id').values())
             if closures_df.empty:
                 merged = DataFrame()
             else:
@@ -676,7 +676,7 @@ def closures(request):
             context = {
                 'pending_force_closed': pending_force_closed,
                 'waiting_for_close': waiting_for_close,
-                'closures': [] if merged.empty else merged.sort_values(by=['close_height'], ascending=False).to_dict(orient='records'),
+                'closures': [] if merged.empty else merged.sort_values(by=['close_height'], ascending=False, kind='stable').to_dict(orient='records'),
                 'network': 'testnet/' if settings.LND_NETWORK == 'testnet' else '',
                 'network_links': network_links(),
                 'graph_links': graph_links()
@@ -1759,8 +1759,8 @@ def pending_htlcs(request):
         stub = lnrpc.LightningStub(lnd_connect())
         block_height = stub.GetInfo(ln.GetInfoRequest()).block_height
         context = {
-            'incoming_htlcs': PendingHTLCs.objects.filter(incoming=True).annotate(blocks_til_expiration=Sum('expiration_height')-block_height, hours_til_expiration=((Sum('expiration_height')-block_height)*10)/60).order_by('expiration_height'),
-            'outgoing_htlcs': PendingHTLCs.objects.filter(incoming=False).annotate(blocks_til_expiration=Sum('expiration_height')-block_height, hours_til_expiration=((Sum('expiration_height')-block_height)*10)/60).order_by('expiration_height')
+            'incoming_htlcs': PendingHTLCs.objects.filter(incoming=True).annotate(blocks_til_expiration=Sum('expiration_height')-block_height, hours_til_expiration=((Sum('expiration_height')-block_height)*10)/60).order_by('expiration_height', 'id'),
+            'outgoing_htlcs': PendingHTLCs.objects.filter(incoming=False).annotate(blocks_til_expiration=Sum('expiration_height')-block_height, hours_til_expiration=((Sum('expiration_height')-block_height)*10)/60).order_by('expiration_height', 'id')
         }
         return render(request, 'pending_htlcs.html', context)
     else:
@@ -1789,7 +1789,7 @@ def failed_htlcs(request):
 def payments(request):
     if request.method == 'GET':
         context = {
-            'payments': Payments.objects.exclude(status=3).annotate(ppm=Round((Sum('fee')*1000000)/Sum('value'), output_field=IntegerField())).order_by('-creation_date')[:150],
+            'payments': Payments.objects.exclude(status=3).annotate(ppm=Round((Sum('fee')*1000000)/Sum('value'), output_field=IntegerField())).order_by('-creation_date', '-index')[:150],
         }
         return render(request, 'payments.html', context)
     else:
@@ -1799,7 +1799,7 @@ def payments(request):
 def invoices(request):
     if request.method == 'GET':
         context = {
-            'invoices': Invoices.objects.filter(state=1).order_by('-creation_date')[:150],
+            'invoices': Invoices.objects.filter(state=1).order_by('-creation_date', '-index')[:150],
         }
         return render(request, 'invoices.html', context)
     else:

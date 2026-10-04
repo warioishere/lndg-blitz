@@ -23,9 +23,9 @@
         </form>
       </td>
       <td title="{{ keysend.settle_date }}">{{ keysend.settle_date|naturaltime }}</td>
-      <td title="{{ keysend.chan_in }}">{% if keysend.chan_in_alias == '' %}---{% else %}{{ keysend.chan_in_alias }}{% endif %}</td>
+      <td title="{{ keysend.chan_in }}">{% if not keysend.chan_in_alias %}---{% else %}{{ keysend.chan_in_alias }}{% endif %}</td>
       <td title="{{ keysend.r_hash }}">{{ keysend.amt_paid|intcomma }}</td>
-      <td>{{ keysend.message }}{% if keysend.sender != None %} | Signed By: {% if keysend.sender_alias != None %}{{ keysend.sender_alias }}{% else %}{{ keysend.sender }}{% endif %}{% endif %}</td>
+      <td>{{ keysend.message|default_if_none:'' }}{% if keysend.sender != None %} | Signed By: {% if keysend.sender_alias != None %}{{ keysend.sender_alias }}{% else %}{{ keysend.sender }}{% endif %}{% endif %}</td>
     </tr>
     {% endfor %}
   </table>
